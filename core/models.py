@@ -80,4 +80,8 @@ class AttackPath(BaseModel):
     chokepoint_vuln_id: str  # The critical vulnerability to patch to break the chain
     path_probability: float = 1.0  # Cumulative probability of successful chain exploitation (0.0 to 1.0)
     step_details: List[Dict[str, Any]] = Field(default_factory=list)  # Step-by-step causal tracing
+    attack_narrative: str = ""  # Plain English explanation of how the attack unfolds to the Crown Jewel DB
+    simplified_flow: List[Dict[str, Any]] = Field(default_factory=list)  # Visual stages: Ingress, Capability, Pivot, Crown Jewel Impact
+    grouped_vectors: List[Dict[str, Any]] = Field(default_factory=list)  # Similar/alternative entry vectors grouped together
+    mitre_tactics: List[Dict[str, str]] = Field(default_factory=list)  # Mapped MITRE ATT&CK techniques
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

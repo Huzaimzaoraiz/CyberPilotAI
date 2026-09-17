@@ -128,6 +128,10 @@ class DatabaseClient:
             self.attack_paths[path.id] = path
         return path.id
 
+    async def clear_attack_paths(self):
+        async with self._lock:
+            self.attack_paths.clear()
+
     async def insert_remediation_plan(self, plan: RemediationPlan) -> str:
         async with self._lock:
             self.remediations[plan.id] = plan

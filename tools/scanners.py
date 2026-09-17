@@ -92,7 +92,11 @@ from tools.vuln_scanner_mcp import (
     tool_scan_xss,
     tool_scan_code_sast,
     tool_scan_web_vulnerabilities,
-    tool_query_cve_knowledgebase
+    tool_query_cve_knowledgebase,
+    tool_scan_phishing,
+    tool_dlr_bruteforce,
+    tool_api_endpoint_scanner,
+    tool_mitre_mapper
 )
 
 async def scan_web_vulnerabilities(target: str) -> List[Dict]:
@@ -110,3 +114,30 @@ async def scan_code_sast(path_or_code: str) -> List[Dict]:
     logger.info(f"[SAST] Running source code security audit...")
     result = await tool_scan_code_sast(path_or_code)
     return result.get("findings", [])
+
+async def scan_phishing(target_or_email: str, sender_domain: str = None) -> Dict:
+    """
+    Analyzes email/domain phishing indicators, calculating Phishing Risk Score (0-100) and SPF/DMARC posture.
+    """
+    logger.info(f"[PhishingDetector] Analyzing phishing threat posture on {target_or_email}...")
+    return await tool_scan_phishing(target_or_email, sender_domain)
+
+async def run_dlr_bruteforce(target_url: str, wordlist_type: str = "common") -> Dict:
+    """
+    Discovers exposed directories (.env, .git, /admin, /swagger.json, /backup.zip) via directory bruteforce.
+    """
+    logger.info(f"[DirBruteforce] Probing sensitive paths & exposed configs on {target_url}...")
+    return await tool_dlr_bruteforce(target_url, wordlist_type)
+
+async def scan_api_endpoints(target_url: str, deep_scan: bool = True) -> Dict:
+    """
+    Scans web applications for API routes, OpenAPI/Swagger specifications, and OWASP API Top 10 vulnerabilities.
+    """
+    logger.info(f"[APIScanner] Auditing API surfaces & authentication on {target_url}...")
+    return await tool_api_endpoint_scanner(target_url, deep_scan)
+
+def map_to_mitre(finding_or_cwe: str) -> Dict:
+    """
+    Maps any vulnerability, CWE, or attack action to standard MITRE ATT&CK tactics & techniques.
+    """
+    return tool_mitre_mapper(finding_or_cwe)

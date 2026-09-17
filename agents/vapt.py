@@ -1,7 +1,15 @@
 import logging
 from typing import Dict, Any, List
 from core.models import TargetAsset, VulnerabilityRecord, VulnStatus, TaskItem, AgentType
-from tools.scanners import run_nmap, query_nvd, scan_web_vulnerabilities
+from tools.scanners import (
+    run_nmap,
+    query_nvd,
+    scan_web_vulnerabilities,
+    scan_phishing,
+    run_dlr_bruteforce,
+    scan_api_endpoints,
+    map_to_mitre
+)
 
 logger = logging.getLogger("VAPTAgent")
 
@@ -57,7 +65,26 @@ class VAPTAgent:
             logger.info(f"[VAPT] Auditing web application vulnerabilities (SQLi, XSS, Headers) on {target}...")
             web_findings = await scan_web_vulnerabilities(target)
             for w_vuln in web_findings:
-                await self._queue_web_validation_task(asset.id, w_vuln)
+                await self._queue_web_validation_task(asset.id, w_vuln, source="TOOL_WEB_SCANNER")
+
+            # 6. Sensitive Directory & File Discovery (dlr_bruteforce)
+            logger.info(f"[VAPT] Running directory & sensitive file bruteforce (dlr_bruteforce) on {target}...")
+            dir_res = await run_dlr_bruteforce(target)
+            for d_vuln in dir_res.get("vulnerabilities", []):
+                await self._queue_web_validation_task(asset.id, d_vuln, source="TOOL_DLR_BRUTEFORCE")
+
+            # 7. API Endpoint & Authorization Scanner (api_endpoint_scanner)
+            logger.info(f"[VAPT] Auditing API surfaces & authentication (api_endpoint_scanner) on {target}...")
+            api_res = await scan_api_endpoints(target)
+            for a_vuln in api_res.get("vulnerabilities", []):
+                await self._queue_web_validation_task(asset.id, a_vuln, source="TOOL_API_SCANNER")
+
+            # 8. Email Security & Phishing Risk Scoring (scan_phishing)
+            logger.info(f"[VAPT] Auditing email domain authentication & phishing exposure on {target}...")
+            phish_res = await scan_phishing(target)
+            for p_vuln in phish_res.get("vulnerabilities", []):
+                p_vuln["phishing_score"] = phish_res.get("phishing_score", 45)
+                await self._queue_web_validation_task(asset.id, p_vuln, source="TOOL_PHISHING_DETECTOR", layer="Email/OSINT")
 
         logger.info(f"VAPT scan complete for {target}.")
 
@@ -65,22 +92,22 @@ class VAPTAgent:
         """Creates the DB record and pushes it to the Orchestrator Queue."""
         cve_id = vuln['cve_id']
         cvss_score = vuln['cvss_score']
+        title = f"Potential {cve_id} in {cpe.split(':')[4]}"
+        mitre_data = map_to_mitre(title)
         
         # Write to Shared Database as UNVALIDATED
         vuln_record = VulnerabilityRecord(
             asset_id=asset_id,
-            title=f"Potential {cve_id} in {cpe.split(':')[4]}",
+            title=title,
             criticality_score=cvss_score,
             layer="Network",
             status=VulnStatus.UNVALIDATED, 
             discovery_source="TOOL_EVIDENCE",
-            confidence_score=0.3 # Low confidence until mathematically proven
+            confidence_score=0.3,
+            metadata={"mitre": mitre_data}
         )
         
         record_id = await self.db.insert_vulnerability(vuln_record)
-        
-        # Translate CVSS (0-10) to Queue Priority (0-100)
-        # A CVSS 9.8 becomes Priority 98, ensuring the Orchestrator validates it first.
         priority = int(cvss_score * 10)
         
         task = TaskItem(
@@ -96,20 +123,29 @@ class VAPTAgent:
         await self.db.insert_task(task)
         logger.info(f"Found {cve_id} (CVSS: {cvss_score}). Queued for Validation with Priority {priority}.")
 
-    async def _queue_web_validation_task(self, asset_id: str, vuln: Dict):
-        """Creates the DB record for web vulnerabilities (SQLi, XSS, headers) and queues for validation."""
+    async def _queue_web_validation_task(self, asset_id: str, vuln: Dict, source: str = "TOOL_WEB_SCANNER", layer: str = "Web"):
+        """Creates the DB record for web vulnerabilities (SQLi, XSS, headers, API, directory, phishing) and queues for validation."""
         title = vuln.get("title", "Web Application Flaw")
         cvss_score = float(vuln.get("cvss_score", 7.5))
         cwe_id = vuln.get("cwe_id", "CWE-Web")
+        mitre_data = map_to_mitre(f"{title} {cwe_id} {vuln.get('mitre_technique', '')}")
+        
+        meta = {
+            "mitre": mitre_data,
+            "path": vuln.get("path"),
+            "endpoint": vuln.get("endpoint"),
+            "phishing_score": vuln.get("phishing_score")
+        }
         
         vuln_record = VulnerabilityRecord(
             asset_id=asset_id,
             title=f"{title} ({cwe_id})",
             criticality_score=cvss_score,
-            layer="Web",
+            layer=layer,
             status=VulnStatus.UNVALIDATED,
-            discovery_source="TOOL_WEB_SCANNER",
-            confidence_score=0.4
+            discovery_source=source,
+            confidence_score=0.5,
+            metadata=meta
         )
         record_id = await self.db.insert_vulnerability(vuln_record)
         priority = int(cvss_score * 10)
@@ -120,7 +156,7 @@ class VAPTAgent:
             payload={
                 "vulnerability_id": record_id,
                 "cve_id": cwe_id,
-                "context": f"{title}. Test payload: {vuln.get('test_payload', 'Standard web probe')}"
+                "context": f"{title}. Test payload: {vuln.get('test_payload', vuln.get('remediation', 'Standard web probe'))}"
             }
         )
         await self.db.insert_task(task)

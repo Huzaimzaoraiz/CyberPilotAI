@@ -200,26 +200,30 @@ class AttackPathAgent:
                     logger.info(f"Objective Edge: [{vuln.title[:20]}] -> [Crown Jewel {jewel.asset_identifier}] (P={pivot_prob:.2f})")
 
         # 7. Find and Rank Attack Paths to Crown Jewels by Maximum Likelihood
+        # Clear stale attack paths before saving newly computed ones
+        await self.db.clear_attack_paths()
+
         for jewel in crown_jewels:
             jnode = f"JEWEL:{jewel.id}"
             if not nx.has_path(self.graph, "INTERNET", jnode):
                 logger.info(f"Crown Jewel ({jewel.asset_identifier}) is unreachable from current graph state.")
                 continue
 
-            # Find paths of least resistance (maximum probability) using Dijkstra
+            # Find paths using Dijkstra
             try:
-                # Get up to 3 shortest paths
                 paths_generator = nx.shortest_simple_paths(self.graph, "INTERNET", jnode, weight="weight")
                 found_paths = []
-                for _ in range(3):
+                for _ in range(5):
                     try:
                         p = next(paths_generator)
                         found_paths.append(p)
                     except StopIteration:
                         break
 
-                for rank_idx, path in enumerate(found_paths):
-                    await self._build_and_save_path(path, asset_map, rank_idx)
+                if found_paths:
+                    # Consolidate paths leading to this crown jewel into a unified primary attack path
+                    # Grouping same-type attacks together rather than spawning separate attack path boxes
+                    await self._build_consolidated_path(found_paths, jewel, asset_map, validated_vulns)
 
             except Exception as e:
                 logger.error(f"Failed calculating attack paths to {jnode}: {e}", exc_info=True)
@@ -228,14 +232,15 @@ class AttackPathAgent:
         """Infers offensive capabilities granted by exploiting this vulnerability."""
         title_lower = vuln.title.lower()
         
-        has_creds = bool(vuln.has_leaked_creds or "credential" in title_lower or "password" in title_lower or "token" in title_lower)
-        is_code_exec = bool("rce" in title_lower or "command" in title_lower or "exec" in title_lower)
-        is_internal_pivot = bool("ssrf" in title_lower or "proxy" in title_lower or "metadata" in title_lower or is_code_exec)
-        is_info_disc = bool("lfi" in title_lower or "traversal" in title_lower or "23017" in title_lower or "disclosure" in title_lower)
-        is_db_access = bool("sql" in title_lower or "injection" in title_lower or "database" in title_lower)
+        has_creds = bool(vuln.has_leaked_creds or any(w in title_lower for w in ["credential", "password", "token", "secret", ".env", "cwe-798", "cwe-200", "auth", "key"]))
+        is_code_exec = bool(any(w in title_lower for w in ["rce", "command", "exec", "cwe-78"]))
+        is_internal_pivot = bool(any(w in title_lower for w in ["ssrf", "proxy", "metadata", "tunnel", "23017"]) or is_code_exec)
+        is_info_disc = bool(any(w in title_lower for w in ["lfi", "traversal", "23017", "disclosure", "dir", "dlr", "swagger", "git", "cwe-200", "cwe-538"]))
+        is_db_access = bool(any(w in title_lower for w in ["sql", "injection", "database", "cwe-89"]))
+        is_phish = bool(any(w in title_lower for w in ["phish", "dmarc", "spf", "email", "t1566"]))
+        is_api = bool(any(w in title_lower for w in ["api", "bola", "idor", "cwe-639", "cwe-306"]))
         
-        # Base exploitability probability derived from CVSS (0-10) and confidence (0-1)
-        base_prob = min(0.95, max(0.20, (vuln.criticality_score / 10.0) * vuln.confidence_score))
+        base_prob = min(0.95, max(0.25, (vuln.criticality_score / 10.0) * vuln.confidence_score))
 
         return {
             "has_creds": has_creds,
@@ -243,6 +248,8 @@ class AttackPathAgent:
             "is_internal_pivot": is_internal_pivot,
             "is_info_disc": is_info_disc,
             "is_db_access": is_db_access,
+            "is_phish": is_phish,
+            "is_api": is_api,
             "base_probability": round(base_prob, 2)
         }
 
@@ -257,7 +264,6 @@ class AttackPathAgent:
         Determines if parent_vuln can lead to child_vuln and calculates transition probability.
         Uses LLM if available, with deterministic capability rules fallback.
         """
-        # 1. Ask LLM if client supports evaluate_vuln_transition
         if hasattr(self.llm, "evaluate_vuln_transition"):
             try:
                 res = await self.llm.evaluate_vuln_transition(parent_vuln, child_vuln)
@@ -266,8 +272,6 @@ class AttackPathAgent:
             except Exception as e:
                 logger.warning(f"LLM transition query failed ({e}), falling back to deterministic rules.")
 
-        # 2. Deterministic Rule Matching:
-        # Credential leak enables authenticated exploitation of child vulnerability
         if parent_caps["has_creds"]:
             return (
                 True, 
@@ -275,7 +279,6 @@ class AttackPathAgent:
                 f"Credentials compromised via '{parent_vuln.title}' satisfy authentication requirements for '{child_vuln.title}'."
             )
 
-        # SSRF or RCE enables internal pivoting to child vulnerability
         if parent_caps["is_internal_pivot"]:
             return (
                 True, 
@@ -283,8 +286,7 @@ class AttackPathAgent:
                 f"Internal network pivot established via '{parent_vuln.title}' bypasses firewalls to expose '{child_vuln.title}'."
             )
 
-        # Local file read reveals config files / tokens to exploit child
-        if parent_caps["is_info_disc"]:
+        if parent_caps["is_info_disc"] or parent_caps["is_api"]:
             return (
                 True, 
                 0.78, 
@@ -293,8 +295,21 @@ class AttackPathAgent:
 
         return False, 0.0, ""
 
-    async def _build_and_save_path(self, raw_path: List[str], asset_map: Dict[str, TargetAsset], rank_idx: int):
-        """Constructs rich step-by-step AttackPath record from graph nodes."""
+    async def _build_consolidated_path(
+        self, 
+        found_paths: List[List[str]], 
+        jewel: TargetAsset, 
+        asset_map: Dict[str, TargetAsset], 
+        validated_vulns: List[VulnerabilityRecord]
+    ):
+        """
+        Consolidates attack trajectories into a single, cohesive AttackPath record.
+        Shows:
+        1. A simpler, understandable narrative flow leading to the Crown Jewel DB.
+        2. Consolidated grouping of all same-type ingress & exploit vectors.
+        3. Full causal step-by-step technical details and MITRE ATT&CK mappings.
+        """
+        raw_path = found_paths[0]
         step_details = []
         vuln_ids_in_chain = []
         asset_ids_in_chain = []
@@ -309,8 +324,7 @@ class AttackPathAgent:
             if vuln_id and vuln_id not in vuln_ids_in_chain:
                 vuln_ids_in_chain.append(vuln_id)
 
-            vuln_obj = None
-            vuln_title = "Exploit Ingress / Pivot"
+            vuln_title = "Perimeter Ingress & Exploitation"
             if u.startswith("VULN:"):
                 node_u_data = self.graph.nodes[u]
                 vuln_obj = node_u_data.get("vuln")
@@ -332,7 +346,6 @@ class AttackPathAgent:
                 "reason": edge_data.get("reason", "Causal exploit transition.")
             })
 
-        # Asset IDs traversed (for backward compatibility with UI asset stepper)
         for node in raw_path:
             if node == "INTERNET":
                 asset_ids_in_chain.append("INTERNET")
@@ -344,28 +357,154 @@ class AttackPathAgent:
                 if aid and aid not in asset_ids_in_chain:
                     asset_ids_in_chain.append(aid)
 
-        # Chokepoint: The root perimeter vulnerability whose remediation cuts the tree
         chokepoint_vuln_id = vuln_ids_in_chain[0] if vuln_ids_in_chain else ""
-
-        # Total risk score weighted by cumulative probability
         final_prob = round(max(0.1, min(0.99, cumulative_prob)), 2)
         total_risk = round(min(9.9, 6.0 + (final_prob * 3.9)), 1)
 
-        attack_path_record = AttackPath(
+        # Group all discovered perimeter/exploit vectors together into a unified list
+        grouped_vectors = []
+        seen_titles = set()
+        for v in validated_vulns:
+            t_clean = v.title.split("(")[0].strip()
+            if t_clean in seen_titles:
+                continue
+            seen_titles.add(t_clean)
+            
+            t_lower = v.title.lower()
+            mitre_data = v.metadata.get("mitre", {})
+            
+            if any(k in t_lower for k in ["sql", "injection", "cwe-89"]):
+                cat = "Web SQL Injection"
+                icon = "fa-database"
+                desc = "Parameter concatenation in queries allows extracting internal credentials and database schema."
+            elif any(k in t_lower for k in ["env", "git", "dir", "dlr", "bruteforce", "cwe-538", "cwe-200"]):
+                cat = "Sensitive File & Directory Exposure"
+                icon = "fa-folder-open"
+                desc = "Publicly accessible configuration or version control repository leaking database secrets."
+            elif any(k in t_lower for k in ["api", "bola", "idor", "cwe-639", "cwe-306"]):
+                cat = "API Broken Authorization"
+                icon = "fa-code"
+                desc = "Unprotected API endpoints disclosing backend service configurations and account hashes."
+            elif any(k in t_lower for k in ["phish", "dmarc", "spf", "email", "t1566"]):
+                cat = "Email Spoofing & Phishing Vector"
+                icon = "fa-envelope-open-text"
+                desc = "Weak email domain posture allowing spear-phishing lures to harvest staff credentials."
+            elif any(k in t_lower for k in ["rce", "command", "cwe-78", "23017", "nginx"]):
+                cat = "Remote Code Execution"
+                icon = "fa-terminal"
+                desc = "Memory corruption or shell execution permitting arbitrary commands and network routing."
+            else:
+                cat = "Perimeter Security Flaw"
+                icon = "fa-shield-halved"
+                desc = "Application configuration weakness providing initial unauthorized access."
+
+            grouped_vectors.append({
+                "vuln_id": v.id,
+                "title": v.title,
+                "category": cat,
+                "icon": icon,
+                "severity": "CRITICAL" if v.criticality_score >= 8.5 else "HIGH" if v.criticality_score >= 7.0 else "MEDIUM",
+                "cvss_score": v.criticality_score,
+                "cwe": v.title.split("(")[-1].replace(")", "") if "(" in v.title else "CWE-General",
+                "mitre_technique": mitre_data.get("technique_id", "T1190"),
+                "mitre_name": mitre_data.get("technique_name", "Exploit Public-Facing Application"),
+                "description": desc
+            })
+
+        # Simplified, Human-Understandable 4-Stage Flow
+        simplified_flow = [
+            {
+                "stage": 1,
+                "stage_name": "Perimeter Ingress & Vector Exploitation",
+                "actor": "External Adversary",
+                "location": "The Public Internet",
+                "badge": "Entry Point",
+                "icon": "fa-globe",
+                "color": "rose",
+                "mitre_id": "T1190 / T1566",
+                "mitre_name": "Initial Access",
+                "headline": "Adversary probes and breaches public web perimeter",
+                "explanation": "The attacker targets public-facing web surfaces, exploiting endpoints via SQL injection, exposed configuration directories (.env, .git), unauthenticated API routes, or deceptive phishing lures. This provides an initial unauthenticated entrypoint."
+            },
+            {
+                "stage": 2,
+                "stage_name": "Secrets Extraction & Privilege Elevation",
+                "actor": "Threat Actor",
+                "location": "DMZ / Web Tier",
+                "badge": "Credential Harvesting",
+                "icon": "fa-key",
+                "color": "amber",
+                "mitre_id": "T1552 / T1078",
+                "mitre_name": "Credential Access",
+                "headline": "Adversary harvests database credentials and backend service tokens",
+                "explanation": "From the compromised endpoint, the attacker dumps environment variables, configuration files, or database query results to acquire cleartext connection credentials, API keys, and elevated administrative tokens."
+            },
+            {
+                "stage": 3,
+                "stage_name": "Lateral Movement & Firewall Bypass",
+                "actor": "Threat Actor",
+                "location": "Internal DMZ Pivot",
+                "badge": "Lateral Pivot",
+                "icon": "fa-arrows-split-up-and-left",
+                "color": "purple",
+                "mitre_id": "T1210 / T1021",
+                "mitre_name": "Lateral Movement",
+                "headline": "Adversary pivots past perimeter firewall into private subnet",
+                "explanation": "Because internal firewall rules trust traffic originating from DMZ web servers, the attacker pivots through the compromised web host, establishing direct internal network socket connections to the isolated internal database subnet."
+            },
+            {
+                "stage": 4,
+                "stage_name": "Crown Jewel DB Compromise & Exfiltration",
+                "actor": "Threat Actor",
+                "location": f"Crown Jewel: {jewel.asset_identifier}",
+                "badge": "Crown Jewel Breach",
+                "icon": "fa-database",
+                "color": "cyan",
+                "mitre_id": "T1530 / T1005",
+                "mitre_name": "Data Exfiltration & Impact",
+                "headline": f"Direct authenticated breach of Crown Jewel DB ({jewel.asset_identifier})",
+                "explanation": f"The attacker authenticates directly into the Crown Jewel database using the harvested credentials. The attacker gains full read/write access to customer records, credentials, and sensitive assets, fulfilling the primary attack objective."
+            }
+        ]
+
+        # Plain English Narrative Storyline
+        attack_narrative = (
+            f"An external adversary on the public Internet identifies one or more vulnerable endpoints on the perimeter "
+            f"(including SQL injection, exposed configuration files like .env, unauthenticated API routes, or phishing vectors). "
+            f"By exploiting these weaknesses, the adversary extracts valid backend database credentials and service tokens. "
+            f"Because internal network perimeter defenses permit incoming traffic from authorized DMZ hosts, the attacker "
+            f"leverages these credentials to laterally pivot through the firewall directly into the internal subnet. "
+            f"The attacker connects directly to the Crown Jewel database ({jewel.asset_identifier}), enabling unauthorized "
+            f"data exfiltration and complete database compromise without triggering perimeter alarms."
+        )
+
+        # MITRE Tactics List
+        mitre_tactics = [
+            {"tactic": "Initial Access", "id": "TA0001", "technique": "T1190 (Exploit Public-Facing App) / T1566 (Phishing)"},
+            {"tactic": "Discovery", "id": "TA0007", "technique": "T1083 (File & Directory Discovery)"},
+            {"tactic": "Credential Access", "id": "TA0006", "technique": "T1552 (Unsecured Credentials)"},
+            {"tactic": "Lateral Movement", "id": "TA0008", "technique": "T1210 (Exploitation of Remote Services)"},
+            {"tactic": "Collection", "id": "TA0009", "technique": "T1530 (Data from Cloud / Database Object)"}
+        ]
+
+        consolidated_path = AttackPath(
             nodes=asset_ids_in_chain,
             edges=vuln_ids_in_chain,
             total_risk_score=total_risk,
             chokepoint_vuln_id=chokepoint_vuln_id,
             path_probability=final_prob,
-            step_details=step_details
+            step_details=step_details,
+            attack_narrative=attack_narrative,
+            simplified_flow=simplified_flow,
+            grouped_vectors=grouped_vectors,
+            mitre_tactics=mitre_tactics
         )
 
-        await self.db.save_attack_path(attack_path_record)
+        await self.db.save_attack_path(consolidated_path)
         logger.warning(
-            f"Saved Probabilistic Attack Chain #{rank_idx + 1}: "
-            f"Likelihood={final_prob * 100:.1f}%, Risk={total_risk}, Chokepoint={chokepoint_vuln_id[:8]}"
+            f"Saved Consolidated Attack Chain: Likelihood={final_prob * 100:.1f}%, "
+            f"Risk={total_risk}, Grouped Vectors={len(grouped_vectors)}, Chokepoint={chokepoint_vuln_id[:8]}"
         )
 
-        # Boost priority on the strategic chokepoint so Orchestrator prioritizes remediation
         if chokepoint_vuln_id:
             await self.db.boost_vulnerability_priority(chokepoint_vuln_id, multiplier=1.5)

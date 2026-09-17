@@ -27,6 +27,15 @@ class MockValidationLLM:
         elif "CSP" in vuln_title.upper() or "HEADER" in vuln_title.upper() or "CWE-693" in vuln_title.upper():
             payload = "curl -I http://target/"
             marker = "nginx"
+        elif "PHISH" in vuln_title.upper() or "DMARC" in vuln_title.upper() or "EMAIL" in vuln_title.upper() or "T1566" in vuln_title.upper():
+            payload = "curl -I http://target/ -H 'X-Phish-Verification: true'"
+            marker = "nginx"
+        elif "ENV" in vuln_title.upper() or "GIT" in vuln_title.upper() or "DIR" in vuln_title.upper() or "BRUTEFORCE" in vuln_title.upper() or "CWE-538" in vuln_title.upper() or "CWE-200" in vuln_title.upper():
+            payload = "curl -I http://target/.env"
+            marker = "nginx"
+        elif "API" in vuln_title.upper() or "BOLA" in vuln_title.upper() or "CWE-639" in vuln_title.upper() or "CWE-306" in vuln_title.upper():
+            payload = "curl -I http://target/api/v1/users"
+            marker = "nginx"
             
         return {
             "payload": payload,

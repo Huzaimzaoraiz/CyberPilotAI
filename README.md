@@ -69,6 +69,15 @@ flowchart TD
   - Static Application Security Testing (`scan_code_sast` - OWASP Top 10)
   - Live/Simulated web security header and CORS checks (`scan_web_vulnerabilities`)
   - CVE and CVSS intelligence lookups (`query_cve_knowledgebase`)
+  - Email & Phishing Threat Detection (`scan_phishing` - Normalized 0-100 Phishing Risk Score & SPF/DMARC validation)
+  - Sensitive Directory & File Discovery (`dlr_bruteforce` - Exposed `.env`, `/.git`, `/admin`, `/backup.zip`)
+  - API Surface & Authorization Auditing (`api_endpoint_scanner` - OWASP API Top 10, BOLA, Broken Authentication)
+  - MITRE ATT&CK Mapping Engine (`mitre_mapper` - Correlates vulnerabilities to Tactics & Technique IDs: T1190, T1566, T1059, T1083, T1210, T1530)
+- **Consolidated Attack Corridors & Human-Understandable Flow**:
+  - Automatically consolidates redundant same-type attack paths into unified attack corridors.
+  - Groups alternative entry vectors (SQL Injection, Directory Exposure, API Broken Auth, Phishing Vector) under a single chokepoint.
+  - Generates an intuitive 4-stage visual trajectory (Perimeter Ingress → Secrets Harvesting → Lateral Firewall Bypass → Crown Jewel DB Breach).
+  - Provides plain-English executive attack narratives detailing how endpoints lead to the internal crown jewel vault.
 - **Strict Safety Gate & Data Sanitization**:
   - Abstract Syntax Tree (AST) validation and command blacklisting before any payload is dispatched.
   - Automatic credential and PII sanitization (redacts JWTs, private keys, passwords, API tokens).
