@@ -31,20 +31,29 @@ async def check_virustotal(domain: str, api_key: str = None) -> Dict:
             logger.error(f"[VirusTotal API Error] {str(e)}")
             return {"malicious_votes": 0, "suspicious_votes": 0}
 
+def is_mock_target(target: str) -> bool:
+    """Helper to distinguish simulated local/test targets from live external targets."""
+    t = (target or "").lower()
+    return any(k in t for k in [
+        "local", "corp", "test", "example", "mock", "internal", "sandbox", "dummy", "127.0.0.1", "localhost"
+    ])
+
 async def check_hibp(domain: str, api_key: str = None) -> List[Dict]:
     """
     Checks Have I Been Pwned for breached emails on the target domain.
     SECURITY CONSTRAINT: We only extract breach metadata, never credential strings.
     """
     if not api_key:
-        logger.info(f"[HIBP] No API key provided. Simulating check for {domain}...")
-        await asyncio.sleep(1)
-        # Simulate a breach to trigger the Attack-Path chain
-        return [{
-            "breach_name": "Simulated_Corp_Breach_2023",
-            "data_classes": ["Email addresses", "Passwords", "Names"],
-            "breach_date": "2023-08-15"
-        }]
+        if is_mock_target(domain):
+            logger.info(f"[HIBP] Simulating breach for mock test target {domain}...")
+            await asyncio.sleep(0.5)
+            return [{
+                "breach_name": "Simulated_Corp_Breach_2023",
+                "data_classes": ["Email addresses", "Passwords", "Names"],
+                "breach_date": "2023-08-15"
+            }]
+        logger.info(f"[HIBP] No API key provided for live target {domain}. Returning clean breach baseline.")
+        return []
 
     url = f"https://haveibeenpwned.com/api/v3/breaches?domain={domain}"
     headers = {"hibp-api-key": api_key, "user-agent": "Security-Agent-Scanner/1.0"}
