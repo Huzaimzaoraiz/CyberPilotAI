@@ -27,8 +27,9 @@ async def safe_orchestrator_runner(orchestrator: Orchestrator):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Initializing Shared Database (Standby mode - awaiting target)...")
+    logger.info("Initializing Shared Database...")
     db = DatabaseClient()
+    await db.initialize()
     app.state.db = db
     
     # Standby: No targets or tasks are seeded. Engine will wait until a target is submitted.
@@ -50,6 +51,8 @@ async def lifespan(app: FastAPI):
             await app.state.orchestrator_task
         except asyncio.CancelledError:
             logger.info("Orchestrator successfully terminated.")
+    
+    await db.close()
 
 from fastapi.responses import FileResponse, HTMLResponse
 import os

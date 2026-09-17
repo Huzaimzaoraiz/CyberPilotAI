@@ -80,6 +80,9 @@ class MockRemediationLLM:
             "patch_type": "general"
         }
 
+MockLLMClient = MockRemediationLLM
+
+
 class RemediationAgent:
     def __init__(self, db_client, llm_client):
         self.db = db_client

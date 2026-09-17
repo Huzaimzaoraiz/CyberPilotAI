@@ -1,0 +1,238 @@
+# TECHQUEST: AUTONOMOUS CYBER-DEFENSE PLATFORM
+# GAP ANALYSIS, REQUIRED MODIFICATIONS & END-TO-END PROMPT SPECIFICATION
+
+================================================================================
+PART 1: DETAILED GAP ANALYSIS & REQUIRED MODIFICATIONS
+================================================================================
+
+Below is the comprehensive audit of what exists in `Autonomous-Cyber-Defense-Platform`
+versus what is mandated by:
+1. FoxFoster Problem Statement (TechQuest - Final Marks: 60)
+2. Midterm Submission Commitments
+3. plan.txt Implementation Blueprint
+
+--------------------------------------------------------------------------------
+1. SHARED PERSISTENT POSTGRES DATABASE (CRITICAL GAP)
+--------------------------------------------------------------------------------
+* Current State:
+  `core/database.py` is entirely an in-memory Python dictionary (`self.assets = {}`,
+  `self.vulnerabilities = {}`). Data is wiped whenever the service restarts.
+* Plan / Evaluation Requirement:
+  A persistent shared PostgreSQL instance managed via docker-compose, acting as the
+  single source of truth.
+* Required Changes:
+  a. Create `db/schema.sql` defining the 6 required tables:
+     - `assets` (id, target, asset_type, host, port, protocol, discovered_at, status)
+     - `findings` (id, asset_id, title, description, severity, cve_id, source, raw_evidence, discovered_at, status)
+       * Note: `source` ('tool' | 'ai_inference') must be strictly enforced on every insert.
+     - `validated_findings` (id, finding_id, exploitable, confidence_score, cvss_score, poc_exists, validation_evidence, mitre_technique, validated_at, status)
+     - `attack_paths` (id, path_nodes, path_edges, cumulative_risk, break_chain_target, mitre_chain, created_at, status)
+     - `remediations` (id, finding_id, attack_path_id, root_cause, fix_suggestion, code_snippet, priority, applied, created_at, status)
+     - `retests` (id, finding_id, remediation_id, still_vulnerable, evidence, retested_at, status)
+  b. Update `core/database.py` (or create `db/db.py`) to connect to Postgres via `asyncpg` or `psycopg2`
+     connection pooling with fallback to in-memory mode when PostgreSQL is not reachable.
+  c. Ensure every record follows the strict status lifecycle: `pending` -> `processing` -> `done`.
+
+--------------------------------------------------------------------------------
+2. DOCKER & CONTAINER SANDBOXING (CRITICAL EVALUATION ITEM)
+--------------------------------------------------------------------------------
+* Current State:
+  No `docker-compose.yml` or `Dockerfile` exists inside the platform repo. Tools execute
+  locally on the host machine.
+* Plan / Evaluation Requirement:
+  Complete reproducible deployment with Docker. Scanning tools (Nmap, Gobuster, etc.)
+  must run inside an isolated tools sandbox container or isolated Docker network so the host
+  is never exposed.
+* Required Changes:
+  a. Create `docker-compose.yml` containing:
+     - `postgres`: PostgreSQL 15 container with persistent volume `pgdata`.
+     - `app`: FastAPI backend serving the platform and UI.
+     - `sandbox-tools` (optional/profile-driven): Container equipped with nmap, gobuster, nikto
+       with an internal Docker network interface.
+  b. Create `Dockerfile` for the application container.
+  c. Create `.env.example` with standard database and API credentials.
+
+--------------------------------------------------------------------------------
+3. MISSING STANDALONE & RECON TOOLS
+--------------------------------------------------------------------------------
+* Current State:
+  Only partial wrappers exist (e.g., `scanners.py` has basic Nmap and CPE query;
+  `api_connectors.py` has basic VT/HIBP; `vuln_scanner_mcp.py` has internal regexes).
+* Plan / Evaluation Requirement:
+  Standalone deterministic Python functions in `tools/recon.py` with standard signatures
+  returning structured JSON dicts:
+  - `search_nvd(cve_id: str) -> dict`: Queries local NVD JSON feed cache or NVD REST API.
+  - `exploitdb_search(cve_id: str) -> dict`: Checks for public PoC existence in ExploitDB.
+  - `virustotal_lookup(target: str) -> dict`: Queries VirusTotal for domain/URL/IP reputation.
+  - `hibp_check(email: str) -> dict`: Privacy-preserving breach check (k-anonymity / simulated).
+  - `dns_lookup(domain: str) -> dict`: DNS records (A, MX, TXT) + SSL certificate info.
+  - `phishing_score(target: str) -> dict`: Heuristic analysis + VT detection score.
+  - `whois_lookup(target: str) -> dict`: Registration date, registrar, and ASN details.
+  - `mitre_attack_lookup(technique_id: str) -> dict`: ATT&CK tactic/technique details.
+  - `dir_bruteforce(url: str) -> dict`: Web directory and endpoint discovery.
+
+--------------------------------------------------------------------------------
+4. EXPORTABLE REPORTING MODULE (MISSING FROM BACKEND & FRONTEND)
+--------------------------------------------------------------------------------
+* Current State:
+  No reporting generation module exists; no download button in the UI.
+* Plan / Evaluation Requirement:
+  Technical report covering methodology, findings, risk scores, attack paths, remediation,
+  and retest status. Exportable as PDF and JSON.
+* Required Changes:
+  a. Create `report/report.py` with:
+     - `report_exporter(db_snapshot: dict, format: str = "pdf") -> bytes`: Generates
+       structured executive and technical vulnerability assessment reports.
+     - `posture_scorer(db_snapshot: dict) -> dict`: Computes overall organizational risk score.
+     - `attack_graph_renderer(graph: dict) -> dict`: Serializes graph nodes/edges for visual output.
+  b. Add FastAPI endpoints in `api/routes.py`:
+     - `GET /api/v1/report/json`: Download assessment summary as JSON.
+     - `GET /api/v1/report/pdf`: Download formatted PDF report.
+  c. Add an "Export Assessment Report" (PDF/JSON) button in the top navigation bar of `web/index.html`.
+
+--------------------------------------------------------------------------------
+5. TEST SUITE & VERIFICATION SUITE (EVALUATION REQUIREMENT)
+--------------------------------------------------------------------------------
+* Current State:
+  No test files exist in the project directory.
+* Plan / Evaluation Requirement:
+  "Test cases and evidence demonstrating core functionality" (required for endterm evaluation).
+* Required Changes:
+  a. Create `tests/` directory:
+     - `test_vapt.py`: Verify asset discovery and port scanning output format.
+     - `test_validation_safety.py`: Test AST validation, destructive payload blocking, and credential redaction.
+     - `test_attack_path.py`: Verify NetworkX graph building, Bayesian probability, and chokepoint identification.
+     - `test_remediation_retest.py`: Verify remediation generation and retest status transition to REMEDIATED.
+     - `test_db_schema.py`: Verify table creation, `source` constraint ('tool' | 'ai_inference'), and status transitions.
+
+================================================================================
+PART 2: THE COMPLETE LLM PROMPT TO EXECUTE ALL CHANGES
+================================================================================
+
+Copy and paste the exact prompt below into your LLM / AI coding assistant:
+
+--------------------------------------------------------------------------------
+BEGIN PROMPT
+--------------------------------------------------------------------------------
+
+You are an expert Principal Cybersecurity Systems Engineer and Full-Stack Developer.
+We are completing the build phase of the "Autonomous Cyber-Defense Platform" for the
+TechQuest Cybersecurity competition (FoxFoster track).
+
+The project root directory is:
+`Autonomous-Cyber-Defense-Platform`
+
+Core Lifecycle:
+Discover -> Validate -> Correlate -> Prioritize -> Remediate -> Retest -> Report
+
+You must implement all missing components, bridge existing code with the formal
+specification in `plan.txt`, and ensure the platform runs seamlessly end-to-end.
+
+---
+### SCOPE CONSTRAINTS (MUST ENFORCE IN CODE)
+1. All active testing restricted to explicitly authorized targets only (`is_authorized: True`).
+2. Validation & probing MUST be non-destructive: no persistence, no credential theft,
+   no unauthorized access, no destructive exploitation. Benign payloads only.
+3. In all database records and API outputs, tool-generated evidence MUST be strictly
+   distinguishable from AI-generated interpretations via the `source` field:
+   `source: "tool"` or `source: "ai_inference"`.
+4. Privacy preservation: Do NOT expose or store plain passwords or private leaked data.
+   For breach lookups, sanitize and use boolean flags (`has_leaked_creds: True/False`).
+
+---
+### STEP-BY-STEP IMPLEMENTATION TASKS
+
+#### TASK 1: DOCKER & REPRODUCIBLE DEPLOYMENT SCAFFOLDING
+1. Create `docker-compose.yml` in the project root:
+   - Service `db`: PostgreSQL 15 with image `postgres:15-alpine`, environment variables
+     for `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, healthcheck, and volume `pgdata`.
+   - Service `web`: Builds the app from `Dockerfile`, exposes port 8000, connects to `db`,
+     environment loaded from `.env`.
+   - Volume `pgdata`.
+2. Create `Dockerfile`:
+   - Python 3.10-slim or 3.11-slim base.
+   - Install system dependencies: `nmap`, `curl`, `gcc`, `libpq-dev`.
+   - Install dependencies from `requirements.txt`.
+   - Expose port 8000, command: `uvicorn main:app --host 0.0.0.0 --port 8000`.
+3. Update `requirements.txt` to ensure all needed dependencies are present:
+   `fastapi`, `uvicorn`, `pydantic`, `networkx`, `asyncpg`, `psycopg2-binary`,
+   `python-nmap`, `requests`, `dnspython`, `python-whois`, `reportlab`, `pytest`, `pytest-asyncio`.
+4. Update `.env.example` with:
+   - `DATABASE_URL=postgresql://postgres:postgres@db:5432/cyberdefense`
+   - `LLM_API_KEY=`, `LLM_BASE_URL=`, `LLM_MODEL=gemini-1.5-flash`
+   - `VT_API_KEY=`, `HIBP_API_KEY=`, `NVD_API_KEY=`
+
+#### TASK 2: POSTGRESQL PERSISTENCE LAYER & SCHEMA
+1. Create `db/schema.sql` implementing the 6 core tables with `status` columns:
+   - `assets`: (id, target, asset_type, host, port, protocol, discovered_at, status)
+   - `findings`: (id, asset_id, title, description, severity, cve_id, source, raw_evidence, discovered_at, status)
+     * Enforce CHECK (source IN ('tool', 'ai_inference')).
+   - `validated_findings`: (id, finding_id, exploitable, confidence_score, cvss_score, poc_exists, validation_evidence, mitre_technique, validated_at, status)
+   - `attack_paths`: (id, path_nodes, path_edges, cumulative_risk, break_chain_target, mitre_chain, created_at, status)
+   - `remediations`: (id, finding_id, attack_path_id, root_cause, fix_suggestion, code_snippet, priority, applied, created_at, status)
+   - `retests`: (id, finding_id, remediation_id, still_vulnerable, evidence, retested_at, status)
+2. Upgrade `core/database.py`:
+   - Provide a dual-mode database engine: If `DATABASE_URL` is set and PostgreSQL is reachable,
+     execute queries against PostgreSQL using an async connection pool. If not connected,
+     gracefully fallback to the existing thread-safe in-memory store so testing without
+     Docker continues to work out-of-the-box.
+   - Maintain the standard CRUD interface used by agents (`insert_asset`, `insert_vulnerability`,
+     `update_vulnerability`, `insert_task`, `get_highest_priority_task`, etc.).
+
+#### TASK 3: IMPLEMENT STANDALONE RECON TOOLS (`tools/recon.py`)
+Create `tools/recon.py` providing the exact deterministic Python tool signatures specified in `plan.txt`:
+1. `search_nvd(cve_id: str) -> dict`:
+   Fetch CVE details from NVD API or local cache. Returns CVSS score, severity, description, references.
+2. `exploitdb_search(cve_id: str) -> dict`:
+   Check public PoC databases/GitHub advisory feeds for verified exploit code presence.
+3. `virustotal_lookup(target: str) -> dict`:
+   Query VirusTotal v3 for domain, IP, or URL reputation and malicious detection ratio.
+4. `hibp_check(email: str) -> dict`:
+   Privacy-preserving breach exposure lookup. Returns breach count and breach names (NO passwords).
+5. `dns_lookup(domain: str) -> dict`:
+   Queries A, AAAA, MX, NS, TXT records and retrieves SSL certificate expiration/issuer.
+6. `phishing_score(target: str) -> dict`:
+   Heuristic checks (typosquatting, suspicious TLDs, entropy, redirect chains) combined with VT signals.
+7. `whois_lookup(target: str) -> dict`:
+   Retrieves registrar, creation date, updated date, and ASN organization.
+8. `mitre_attack_lookup(technique_id: str) -> dict`:
+   Maps technique ID (e.g. T1190, T1059) to MITRE ATT&CK tactic, description, and mitigation.
+9. `dir_bruteforce(url: str) -> dict`:
+   Non-destructive discovery of common administrative and sensitive web paths (`.env`, `/admin`, `/api/docs`, etc.).
+
+#### TASK 4: EXPORTABLE REPORT GENERATOR (`report/report.py` & API)
+1. Create `report/report.py`:
+   - `generate_json_report(db_snapshot: dict) -> dict`: Formats full assessment metadata, executive
+     summary, posture score, findings table, attack path chokepoints, remediation status, and retest evidence.
+   - `generate_pdf_report(db_snapshot: dict) -> bytes`: Uses `reportlab` to compile a professional,
+     publication-grade PDF report complete with title page, executive summary, posture score, vulnerability table,
+     attack chain breakdown, and verified retest certificates.
+2. Expose report endpoints in `api/routes.py`:
+   - `GET /api/v1/report/json` -> Returns assessment JSON file.
+   - `GET /api/v1/report/pdf` -> Returns streaming PDF download (`Content-Disposition: attachment; filename="Security_Assessment_Report.pdf"`).
+3. In `web/index.html`:
+   - Add "Download PDF Report" and "Export JSON" action buttons in the dashboard header.
+
+#### TASK 5: COMPREHENSIVE TEST SUITE (`tests/`)
+Create unit and integration tests using `pytest` and `pytest-asyncio` inside `tests/`:
+1. `tests/test_safety.py`: Test payload validator against dangerous commands (`rm -rf`, `curl | bash`),
+   verify credential scrubbing/redaction on output text.
+2. `tests/test_attack_path.py`: Test NetworkX attack graph creation, Bayesian score propagation, and
+   break-the-chain chokepoint ranking.
+3. `tests/test_retesting.py`: Verify that when a retest suppresses exploit markers, vulnerability status
+   is transitioned to `REMEDIATED` and a priority graph update is queued.
+4. `tests/test_recon_tools.py`: Test that `search_nvd`, `dns_lookup`, `phishing_score`, and `hibp_check`
+   return structured dictionaries adhering to schema.
+5. `tests/test_api_endpoints.py`: Test FastAPI endpoints (`/targets`, `/queue`, `/vulnerabilities`,
+   `/attack-paths`, `/report/json`, `/report/pdf`).
+
+---
+### QUALITY & VERIFICATION REQUIREMENTS
+- Do not remove or break existing working features (the React dashboard, the LLM fallback cascading in `tools/llm.py`, or the MCP scanner server in `tools/vuln_scanner_mcp.py`).
+- Keep all code clean, modular, properly typed, and documented.
+- Run `pytest` to ensure all tests pass cleanly.
+- Verify that `docker-compose up --build` boots up PostgreSQL and the FastAPI application successfully.
+
+--------------------------------------------------------------------------------
+END PROMPT
+--------------------------------------------------------------------------------

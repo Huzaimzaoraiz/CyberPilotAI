@@ -101,6 +101,7 @@ async def create_target_and_start_scan(req: TargetCreateRequest, db: DatabaseCli
 # --- 2. Dashboard: Monitored Assets ---
 
 @router.get("/assets", response_model=List[TargetAsset])
+@router.get("/targets", response_model=List[TargetAsset])
 async def get_assets(db: DatabaseClient = Depends(get_db)):
     """Fetches all registered target assets."""
     return await db.get_all_assets()
@@ -190,7 +191,7 @@ async def get_scan_session(db: DatabaseClient = Depends(get_db)):
 async def reset_session(db: DatabaseClient = Depends(get_db)):
     """Resets all assessment findings and tasks to return to standby."""
     await db.clear_all()
-    return {"message": "Session reset successfully. Engine returned to standby."}
+    return {"status": "success", "message": "Session reset successfully. Engine returned to standby."}
 
 @router.get("/debug")
 async def get_debug_state(db: DatabaseClient = Depends(get_db)):
@@ -265,3 +266,41 @@ async def run_web_scan(req: WebScanRequest):
         "findings_count": len(findings),
         "findings": findings
     }
+
+# --- 9. Assessment Report Generation & Export ---
+
+@router.get("/report/json")
+async def export_report_json(db: DatabaseClient = Depends(get_db)):
+    """Downloads structured assessment summary as JSON."""
+    from report.report import generate_json_report
+    snapshot = await db.get_snapshot() if hasattr(db, "get_snapshot") else {
+        "scan_session": getattr(db, "scan_session", {}),
+        "assets": [a.model_dump() if hasattr(a, "model_dump") else a.dict() for a in db.assets.values()],
+        "vulnerabilities": [v.model_dump() if hasattr(v, "model_dump") else v.dict() for v in db.vulnerabilities.values()],
+        "attack_paths": [p.model_dump() if hasattr(p, "model_dump") else p.dict() for p in db.attack_paths.values()],
+        "remediations": [r.model_dump() if hasattr(r, "model_dump") else r.dict() for r in db.remediations.values()],
+        "retests": getattr(db, "retests", {})
+    }
+    return generate_json_report(snapshot)
+
+@router.get("/report/pdf")
+async def export_report_pdf(db: DatabaseClient = Depends(get_db)):
+    """Downloads formatted, publication-grade executive and technical PDF report."""
+    from report.report import generate_pdf_report
+    from fastapi.responses import Response
+    snapshot = await db.get_snapshot() if hasattr(db, "get_snapshot") else {
+        "scan_session": getattr(db, "scan_session", {}),
+        "assets": [a.model_dump() if hasattr(a, "model_dump") else a.dict() for a in db.assets.values()],
+        "vulnerabilities": [v.model_dump() if hasattr(v, "model_dump") else v.dict() for v in db.vulnerabilities.values()],
+        "attack_paths": [p.model_dump() if hasattr(p, "model_dump") else p.dict() for p in db.attack_paths.values()],
+        "remediations": [r.model_dump() if hasattr(r, "model_dump") else r.dict() for r in db.remediations.values()],
+        "retests": getattr(db, "retests", {})
+    }
+    pdf_bytes = generate_pdf_report(snapshot)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": 'attachment; filename="Security_Assessment_Report.pdf"'
+        }
+    )

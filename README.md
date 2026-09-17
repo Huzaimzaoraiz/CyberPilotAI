@@ -106,15 +106,28 @@ Autonomous-Cyber-Defense-Platform/
 │   ├── remediation.py         # AI patch synthesis & root-cause analysis
 │   └── retesting.py           # Automated patch verifier
 ├── api/
-│   └── routes.py              # REST API endpoints for scans, targets & stats
+│   └── routes.py              # REST API endpoints for scans, targets, reports & stats
 ├── core/
 │   ├── config.py              # Settings loader & environment parser
-│   ├── database.py            # Thread-safe in-memory state engine
+│   ├── database.py            # Dual-mode asyncpg PostgreSQL / thread-safe in-memory state engine
 │   └── models.py              # Pydantic data schemas & state models
+├── db/
+│   └── schema.sql             # Relational schema for PostgreSQL persistence
+├── report/
+│   └── report.py              # Executive PDF & structured JSON assessment report generator
+├── tests/
+│   ├── test_api_endpoints.py  # REST API and scope authorization verification
+│   ├── test_attack_path.py    # Bayesian attack path & chokepoint tests
+│   ├── test_db_schema.py      # Schema constraints, table definitions & lifecycle tests
+│   ├── test_recon_tools.py    # Deterministic reconnaissance tool tests
+│   ├── test_retesting.py      # Retest verification & remediation transitions
+│   ├── test_safety.py         # AST validator & destructive payload blocking tests
+│   └── test_vapt.py           # VAPT discovery & port scanning tests
 ├── tools/
 │   ├── api_connectors.py      # VirusTotal & external API integrations
 │   ├── llm.py                 # Resilient multi-provider LLM client
-│   ├── safety.py              # Payload validators & data sanitizers
+│   ├── recon.py               # Standalone deterministic reconnaissance suite (NVD, HIBP, DNS, etc.)
+│   ├── safety.py              # Payload validators, AST checks & data sanitizers
 │   ├── sandbox.py             # Isolated execution environment
 │   ├── scanners.py            # Reconnaissance wrappers (Nmap, NVD)
 │   └── vuln_scanner_mcp.py    # Stdio Model Context Protocol (MCP) server
@@ -122,6 +135,8 @@ Autonomous-Cyber-Defense-Platform/
 │   └── index.html             # Visual Cyber Operations Dashboard
 ├── .env.example               # Environment variables template
 ├── .gitignore                 # Version control exclusions
+├── docker-compose.yml         # Containerized stack (PostgreSQL 15 + FastAPI app)
+├── Dockerfile                 # Multi-stage production container with nmap & libpq
 ├── LICENSE                    # MIT License
 ├── main.py                    # Application entry point (FastAPI server)
 └── requirements.txt           # Python dependencies
@@ -169,19 +184,29 @@ NVD_API_KEY=
 
 ### 4. Running the Platform
 
-Start the FastAPI server and background orchestrator:
+#### Option A: Docker Compose (Recommended)
+Launch the containerized stack including PostgreSQL 15 and the FastAPI application:
+```bash
+docker-compose up --build
+```
 
+#### Option B: Standalone Python
+Start the FastAPI server and background orchestrator locally (defaults to thread-safe in-memory mode if PostgreSQL is not active):
 ```bash
 python main.py
-```
-Or with Uvicorn directly:
-```bash
+# or
 uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 - **Dashboard UI**: [http://localhost:8000/](http://localhost:8000/) or [http://localhost:8000/dashboard](http://localhost:8000/dashboard)
 - **Interactive Swagger Docs**: [http://localhost:8000/docs](http://localhost:8000/docs)
 - **ReDoc Documentation**: [http://localhost:8000/redoc](http://localhost:8000/redoc)
+
+### 5. Running the Test Suite
+Execute the automated test suite verifying all safety gates, AST validation, Bayesian attack graphs, retest workflows, and reconnaissance tools:
+```bash
+pytest tests/ -v
+```
 
 ---
 
@@ -191,13 +216,17 @@ uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 | :--- | :--- | :--- |
 | `POST` | `/api/v1/targets` | Ingest a new target domain/IP and kick off automated discovery |
 | `GET` | `/api/v1/assets` | Retrieve all registered target assets and crown jewels |
+| `GET` | `/api/v1/targets` | Alias for `/api/v1/assets` |
 | `GET` | `/api/v1/vulnerabilities` | List all discovered vulnerabilities and verification statuses |
 | `GET` | `/api/v1/attack-paths` | Retrieve computed attack graph paths and chokepoint vulnerabilities |
-| `GET` | `/api/v1/remediations` | View generated root-cause analyses and code/config patches |
-| `POST` | `/api/v1/remediations/{id}/apply` | Apply a remediation patch and trigger automated retesting |
-| `GET` | `/api/v1/engine/metrics` | Retrieve engine metrics, task queues, and vulnerability statistics |
-| `GET` | `/api/v1/engine/llm-status` | Check the active LLM model, fallback pool, and quota health |
-| `POST` | `/api/v1/engine/reset` | Clear all session state to launch a fresh scan |
+| `GET` | `/api/v1/remediations/{vuln_id}` | View generated root-cause analysis and code/config patch for a finding |
+| `POST` | `/api/v1/retest` | Trigger manual post-fix verification on a patched finding |
+| `GET` | `/api/v1/report/json` | Download complete structured security assessment report in JSON format |
+| `GET` | `/api/v1/report/pdf` | Download publication-grade executive and technical audit report in PDF format |
+| `POST` | `/api/v1/reset` | Clear all session state and database findings to return to standby |
+| `GET` | `/api/v1/session` | Get current scan session telemetry and timer state |
+| `POST` | `/api/v1/scanners/sast` | On-demand Static Application Security Testing (OWASP Top 10) |
+| `POST` | `/api/v1/scanners/web` | On-demand live/simulated web application auditing |
 
 ---
 

@@ -8,7 +8,7 @@ class SafetyValidator:
     """Hardcoded heuristics to prevent destructive payloads from being executed."""
     
     BANNED_SQL = r"(?i)\b(DROP|DELETE|UPDATE|INSERT|ALTER|TRUNCATE|GRANT|REVOKE)\b"
-    BANNED_BASH = r"(?i)(\brm\b|\bmv\b|\bmkfs\b|>|>>|\bkill\b|\breboot\b|\bshutdown\b|\bchmod\b)"
+    BANNED_BASH = r"(?i)(\brm\b|\bmv\b|\bmkfs\b|(?:\s+|^)>{1,2}\s*[/~a-z0-9_]|\bkill\b|\breboot\b|\bshutdown\b|\bchmod\b|\|\s*(bash|sh|zsh|dash)|curl.*?\|\s*bash|wget.*?\|\s*bash)"
     
     @classmethod
     def validate_payload(cls, payload: str) -> Tuple[bool, str]:
@@ -23,6 +23,22 @@ class SafetyValidator:
             return False, "Payload contains destructive shell commands."
 
         return True, "Payload passed safety heuristics."
+
+    @classmethod
+    def validate_ast(cls, code_snippet: str) -> Tuple[bool, str]:
+        """Validates Python code snippets via AST to block dangerous execution patterns."""
+        import ast
+        try:
+            tree = ast.parse(code_snippet)
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Call):
+                    if isinstance(node.func, ast.Name) and node.func.id in ("eval", "exec", "__import__"):
+                        return False, f"Dangerous AST invocation: {node.func.id}() is prohibited."
+                    if isinstance(node.func, ast.Attribute) and node.func.attr in ("system", "popen", "spawn"):
+                        return False, f"Dangerous system execution: {node.func.attr}() is prohibited."
+            return True, "AST passed safety validation."
+        except SyntaxError:
+            return cls.validate_payload(code_snippet)
 
 class DataSanitizer:
     """Scrubs sensitive information from HTTP responses before evaluation or storage."""

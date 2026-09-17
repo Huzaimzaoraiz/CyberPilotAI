@@ -45,6 +45,13 @@ class RetestingAgent:
         )
 
         # 3. Handle the State Transition
+        if hasattr(self.db, "record_retest"):
+            await self.db.record_retest(
+                finding_id=vuln_id,
+                still_vulnerable=not is_patched,
+                evidence=reason
+            )
+
         if is_patched:
             logger.info(f"[+] SUCCESS: {vuln_record.title} is REMEDIATED. ({reason})")
             

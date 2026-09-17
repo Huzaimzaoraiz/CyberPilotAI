@@ -42,6 +42,8 @@ class MockAttackPathLLM:
                 "causal_reason": f"Local file disclosure via '{parent_vuln.title}' leaks tokens and secrets required to target '{child_vuln.title}'."
             }
         return {"is_chainable": False, "transition_probability": 0.0, "causal_reason": "No causal link."}
+ 
+MockAttackPathCorrelator = MockAttackPathLLM
 
 
 class AttackPathAgent:
