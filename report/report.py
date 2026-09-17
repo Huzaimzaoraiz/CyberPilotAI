@@ -485,21 +485,32 @@ def generate_pdf_report(db_snapshot: Dict[str, Any]) -> bytes:
     ]
 
     if vulns:
-        for v in vulns[:15]:
-            status_raw = str(v.get("status", "unvalidated")).lower()
-            if status_raw == "remediated":
+        for v in vulns:
+            title_text = v.get("title") if isinstance(v, dict) else getattr(v, "title", "Unknown")
+            layer_text = v.get("layer") if isinstance(v, dict) else getattr(v, "layer", "Web")
+            crit_score = v.get("criticality_score") if isinstance(v, dict) else getattr(v, "criticality_score", 5.0)
+            disc_source = v.get("discovery_source") if isinstance(v, dict) else getattr(v, "discovery_source", "")
+
+            raw_status = v.get("status") if isinstance(v, dict) else getattr(v, "status", "unvalidated")
+            status_val = getattr(raw_status, "value", str(raw_status)).lower().strip()
+
+            if status_val == "remediated":
                 status_html = "<font color='#16A34A'><b>REMEDIATED</b></font>"
-            elif status_raw in ("validated", "done"):
+            elif status_val in ("validated", "done"):
                 status_html = "<font color='#DC2626'><b>VALIDATED</b></font>"
+            elif status_val == "validating":
+                status_html = "<font color='#D97706'><b>VALIDATING</b></font>"
+            elif status_val in ("false_positive", "false-positive"):
+                status_html = "<font color='#64748B'>FALSE POSITIVE</font>"
             else:
                 status_html = "<font color='#64748B'>UNVALIDATED</font>"
 
-            source_str = "tool" if "tool" in str(v.get("discovery_source", "")).lower() else "ai_inference"
+            source_str = "tool" if "tool" in str(disc_source).lower() else "ai_inference"
 
             findings_rows.append([
-                Paragraph(f"<b>{v.get('title', 'Unknown')}</b>", body_style),
-                Paragraph(v.get("layer", "Web"), body_style),
-                Paragraph(f"{float(v.get('criticality_score', 5.0)):.1f}", body_style),
+                Paragraph(f"<b>{title_text or 'Unknown'}</b>", body_style),
+                Paragraph(str(layer_text or 'Web'), body_style),
+                Paragraph(f"{float(crit_score or 5.0):.1f}", body_style),
                 Paragraph(source_str, body_style),
                 Paragraph(status_html, body_style)
             ])
