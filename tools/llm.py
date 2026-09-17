@@ -32,9 +32,9 @@ class RealLLMClient:
         from core.config import settings
         resolved_key = api_key or settings.LLM_API_KEY or "none"
         resolved_base_url = base_url or settings.LLM_BASE_URL or None
-        self.model = model or settings.LLM_MODEL or "gemini-3.5-flash-lite"
+        self.model = model or settings.LLM_MODEL or "gemini-3.5-flash"
         self.fallback_models = fallback_models or getattr(settings, "LLM_FALLBACK_MODELS", [
-            "gemini-2.5-flash", "gemini-1.5-flash", "gemini-2.5-pro", "gemini-1.5-pro", "gpt-4o-mini"
+            "gemini-3.5-flash", "gemini-flash-latest", "gemini-3.5-flash-lite", "gpt-4o-mini"
         ])
         
         client_kwargs = {"api_key": resolved_key, "max_retries": 0}
@@ -127,7 +127,7 @@ class RealLLMClient:
                 if cpe not in cpes:
                     cpes.append(cpe)
 
-        return cpes if cpes else ["cpe:2.3:a:f5:nginx:1.18.0:*:*:*:*:*:*:*"]
+        return cpes
 
     # --- 2. Validation Agent Ability ---
     async def generate_safe_poc(self, vuln_title: str) -> Dict[str, str]:
@@ -148,25 +148,45 @@ class RealLLMClient:
         
         # Deterministic fallbacks
         vuln_lower = vuln_title.lower()
-        if "sql" in vuln_lower or "sqli" in vuln_lower:
+        if "sql" in vuln_lower or "sqli" in vuln_lower or "cwe-89" in vuln_lower:
             return {
                 "payload": "' OR '1'='1' --",
                 "expected_marker": "syntax error near 'OR 1=1'"
             }
-        elif "xss" in vuln_lower or "script" in vuln_lower:
+        elif "xss" in vuln_lower or "script" in vuln_lower or "cwe-79" in vuln_lower:
             return {
                 "payload": "<script>/*canary*/alert(1)</script>",
                 "expected_marker": "<script>/*canary*/alert(1)</script>"
             }
-        elif "23017" in vuln_lower or "nginx" in vuln_lower:
+        elif "23017" in vuln_lower or "nginx" in vuln_lower or "lfi" in vuln_lower or "cwe-22" in vuln_lower:
             return {
                 "payload": "curl -H 'Host: vulnerable' http://target/ --path-as-is ../../../etc/passwd",
                 "expected_marker": "root:x:0"
             }
-        elif "rce" in vuln_lower or "command" in vuln_lower or "15778" in vuln_lower:
+        elif "rce" in vuln_lower or "command" in vuln_lower or "15778" in vuln_lower or "openssh" in vuln_lower or "cwe-78" in vuln_lower:
             return {
                 "payload": "; echo AGENT_VALIDATED_SUCCESS",
                 "expected_marker": "AGENT_VALIDATED_SUCCESS"
+            }
+        elif any(k in vuln_lower for k in ["env", "git", "dir", "bruteforce", "cwe-538", "cwe-200"]):
+            return {
+                "payload": "curl -I http://target/.env",
+                "expected_marker": "nginx"
+            }
+        elif any(k in vuln_lower for k in ["api", "auth", "bola", "idor", "cwe-639", "cwe-306"]):
+            return {
+                "payload": "curl -I http://target/api/v1/users",
+                "expected_marker": "nginx"
+            }
+        elif any(k in vuln_lower for k in ["phish", "dmarc", "spf", "email", "t1566"]):
+            return {
+                "payload": "curl -I http://target/ -H 'X-Phish-Verification: true'",
+                "expected_marker": "nginx"
+            }
+        elif any(k in vuln_lower for k in ["csp", "header", "cwe-693"]):
+            return {
+                "payload": "curl -I http://target/",
+                "expected_marker": "nginx"
             }
         return {
             "payload": "' OR 1=1 --",

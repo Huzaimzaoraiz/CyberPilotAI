@@ -46,18 +46,28 @@ def posture_scorer(db_snapshot: Dict[str, Any]) -> Dict[str, Any]:
     total_assets = len(assets)
     total_findings = len(vulns)
 
+    def _val(obj, key, default=None):
+        if isinstance(obj, dict):
+            return obj.get(key, default)
+        return getattr(obj, key, default)
+
     # 1. Isolate strictly VALIDATED and REMEDIATED findings
+    def _is_status(v, target_status):
+        st = _val(v, "status", "")
+        st_val = getattr(st, "value", str(st)).lower()
+        return target_status in st_val
+
     validated_vulns = [
         v for v in vulns 
-        if str(v.get("status", "")).lower() in ("validated", "done")
+        if _is_status(v, "validated") or _is_status(v, "done")
     ]
     remediated_vulns = [
         v for v in vulns 
-        if str(v.get("status", "")).lower() == "remediated"
+        if _is_status(v, "remediated")
     ]
     unvalidated_vulns = [
         v for v in vulns 
-        if str(v.get("status", "")).lower() not in ("validated", "remediated", "done")
+        if not (_is_status(v, "validated") or _is_status(v, "remediated") or _is_status(v, "done"))
     ]
 
     sev_counts = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
@@ -67,7 +77,7 @@ def posture_scorer(db_snapshot: Dict[str, Any]) -> Dict[str, Any]:
 
     # 2. Penalty strictly from validated vulnerabilities & CVE scores
     for v in validated_vulns:
-        score = float(v.get("criticality_score") or v.get("cvss_score") or 5.0)
+        score = float(_val(v, "criticality_score") or _val(v, "cvss_score") or 5.0)
         
         if score >= 9.0:
             sev = "CRITICAL"
@@ -91,17 +101,17 @@ def posture_scorer(db_snapshot: Dict[str, Any]) -> Dict[str, Any]:
     
     # Measure: Active TLS / SSL Encryption
     has_ssl = any(
-        a.get("metadata", {}).get("ssl", {}).get("has_ssl")
-        or str(a.get("asset_identifier", "")).startswith("https")
-        or a.get("metadata", {}).get("port") in (443, 8443)
+        _val(_val(a, "metadata", {}), "ssl", {}).get("has_ssl")
+        or str(_val(a, "asset_identifier", "")).startswith("https")
+        or _val(_val(a, "metadata", {}), "port") in (443, 8443)
         for a in assets
-    ) or any("google" in str(a.get("asset_identifier", "")).lower() for a in assets)
+    ) or any("google" in str(_val(a, "asset_identifier", "")).lower() for a in assets)
     if has_ssl:
         defensive_measures.append("Enforced TLS/SSL Cryptographic Transport")
 
     # Measure: Clean Threat Intelligence Reputation (VirusTotal)
     has_clean_reputation = not any(
-        "flagged as malicious" in str(v.get("title", "")).lower()
+        "flagged as malicious" in str(_val(v, "title", "")).lower()
         for v in vulns
     )
     if has_clean_reputation:
@@ -109,7 +119,7 @@ def posture_scorer(db_snapshot: Dict[str, Any]) -> Dict[str, Any]:
 
     # Measure: Privacy & Credential Defense (No Leaked Credentials)
     has_no_leaked_creds = not any(
-        v.get("has_leaked_creds") is True or "credentials exposed" in str(v.get("title", "")).lower()
+        _val(v, "has_leaked_creds") is True or "credentials exposed" in str(_val(v, "title", "")).lower()
         for v in vulns
     )
     if has_no_leaked_creds:
@@ -117,7 +127,7 @@ def posture_scorer(db_snapshot: Dict[str, Any]) -> Dict[str, Any]:
 
     # Measure: Hardened Domain & Anti-Spoofing Configuration
     has_anti_spoofing = not any(
-        "phishing" in str(v.get("title", "")).lower() and float(v.get("criticality_score", 0)) > 6.0
+        "phishing" in str(_val(v, "title", "")).lower() and float(_val(v, "criticality_score", 0)) > 6.0
         for v in vulns
     )
     if has_anti_spoofing:
@@ -125,7 +135,7 @@ def posture_scorer(db_snapshot: Dict[str, Any]) -> Dict[str, Any]:
 
     # Measure: Restricted Perimeter Surface & Port Hygiene
     has_port_hygiene = not any(
-        any(bad in str(v.get("title", "")).lower() for bad in ["telnet", "ftp", "smb", "rdp", "3389", "445"])
+        any(bad in str(_val(v, "title", "")).lower() for bad in ["telnet", "ftp", "smb", "rdp", "3389", "445"])
         for v in vulns
     )
     if has_port_hygiene:
@@ -179,6 +189,7 @@ def posture_scorer(db_snapshot: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "posture_score": posture_score,
         "posture_grade": grade,
+        "grade": grade,
         "risk_index": risk_index,
         "total_assets": total_assets,
         "total_findings": total_findings,

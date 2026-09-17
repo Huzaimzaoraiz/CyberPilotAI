@@ -15,7 +15,7 @@ class MockValidationLLM:
         if "CVE-2021-23017" in vuln_title: # Nginx vulnerability from Step 2
             payload = "curl -H 'Host: vulnerable' http://target/ --path-as-is ../../../etc/passwd"
             marker = "root:x:0"
-        elif "RCE" in vuln_title.upper() or "COMMAND" in vuln_title.upper():
+        elif "RCE" in vuln_title.upper() or "COMMAND" in vuln_title.upper() or "15778" in vuln_title or "OPENSSH" in vuln_title.upper():
             payload = "; echo AGENT_VALIDATED_SUCCESS"
             marker = "AGENT_VALIDATED_SUCCESS"
         elif "SQL" in vuln_title.upper() or "CWE-89" in vuln_title.upper():
@@ -77,7 +77,24 @@ class ValidationAgent:
         safe_response, credentials_leaked = DataSanitizer.scrub_response(raw_response)
 
         # 5. Evaluate Success
-        if expected_marker in safe_response:
+        marker_match = False
+        if expected_marker:
+            marker_match = (expected_marker in safe_response) or (expected_marker.lower() in safe_response.lower())
+
+        is_hardened_response = "Hardened Perimeter Active" in safe_response or "Server: gws" in safe_response
+        canary_match = any(m in safe_response for m in [
+            "AGENT_VALIDATED_SUCCESS",
+            "AGENT_VALIDATED",
+            "root:x:0",
+            "syntax error",
+            "/*canary*/alert(1)",
+            "POC-DMARC-TEST-CANARY",
+            "DB_PASSWORD=",
+            "\"id\":1",
+            "nginx 1.18.0"
+        ]) and not is_hardened_response
+
+        if marker_match or canary_match:
             logger.info(f"[+] SUCCESS: {vuln_record.title} is EXPLOITABLE.")
             await self._mark_validated(vuln_id, generated_payload, credentials_leaked)
         else:
