@@ -65,9 +65,13 @@ def posture_scorer(db_snapshot: Dict[str, Any]) -> Dict[str, Any]:
         v for v in vulns 
         if _is_status(v, "remediated")
     ]
+    false_positive_vulns = [
+        v for v in vulns 
+        if _is_status(v, "false_positive")
+    ]
     unvalidated_vulns = [
         v for v in vulns 
-        if not (_is_status(v, "validated") or _is_status(v, "remediated") or _is_status(v, "done"))
+        if not (_is_status(v, "validated") or _is_status(v, "remediated") or _is_status(v, "false_positive") or _is_status(v, "done"))
     ]
 
     sev_counts = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
@@ -195,6 +199,7 @@ def posture_scorer(db_snapshot: Dict[str, Any]) -> Dict[str, Any]:
         "total_findings": total_findings,
         "validated_findings_count": len(validated_vulns),
         "unvalidated_findings_count": len(unvalidated_vulns),
+        "false_positives_count": len(false_positive_vulns),
         "remediated_findings": len(remediated_vulns),
         "active_criticals": active_criticals,
         "active_highs": active_highs,
@@ -501,7 +506,7 @@ def generate_pdf_report(db_snapshot: Dict[str, Any]) -> bytes:
             elif status_val == "validating":
                 status_html = "<font color='#D97706'><b>VALIDATING</b></font>"
             elif status_val in ("false_positive", "false-positive"):
-                status_html = "<font color='#64748B'>FALSE POSITIVE</font>"
+                status_html = "<font color='#64748B'><b>FALSE POSITIVE</b></font>"
             else:
                 status_html = "<font color='#64748B'>UNVALIDATED</font>"
 

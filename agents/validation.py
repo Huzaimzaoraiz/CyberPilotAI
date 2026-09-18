@@ -8,38 +8,57 @@ logger = logging.getLogger("ValidationAgent")
 class MockValidationLLM:
     """Simulates an LLM generating a safe PoC based on vulnerability context."""
     async def generate_safe_poc(self, vuln_title: str) -> Dict[str, str]:
-        # If it's a generic CVE, default to an LFI attempt
-        payload = "' OR 1=1 --"
-        marker = "syntax error"
+        vuln_lower = vuln_title.lower()
         
-        if "CVE-2021-23017" in vuln_title: # Nginx vulnerability from Step 2
-            payload = "curl -H 'Host: vulnerable' http://target/ --path-as-is ../../../etc/passwd"
-            marker = "root:x:0"
-        elif "RCE" in vuln_title.upper() or "COMMAND" in vuln_title.upper() or "15778" in vuln_title or "OPENSSH" in vuln_title.upper():
-            payload = "; echo AGENT_VALIDATED_SUCCESS"
-            marker = "AGENT_VALIDATED_SUCCESS"
-        elif "SQL" in vuln_title.upper() or "CWE-89" in vuln_title.upper():
-            payload = "' OR 1=1 --"
-            marker = "syntax error"
-        elif "XSS" in vuln_title.upper() or "CWE-79" in vuln_title.upper():
-            payload = "<script>/*canary*/alert(1)</script>"
-            marker = "/*canary*/alert(1)"
-        elif "CSP" in vuln_title.upper() or "HEADER" in vuln_title.upper() or "CWE-693" in vuln_title.upper():
-            payload = "curl -I http://target/"
-            marker = "nginx"
-        elif "PHISH" in vuln_title.upper() or "DMARC" in vuln_title.upper() or "EMAIL" in vuln_title.upper() or "T1566" in vuln_title.upper():
-            payload = "curl -I http://target/ -H 'X-Phish-Verification: true'"
-            marker = "nginx"
-        elif "ENV" in vuln_title.upper() or "GIT" in vuln_title.upper() or "DIR" in vuln_title.upper() or "BRUTEFORCE" in vuln_title.upper() or "CWE-538" in vuln_title.upper() or "CWE-200" in vuln_title.upper():
-            payload = "curl -I http://target/.env"
-            marker = "nginx"
-        elif "API" in vuln_title.upper() or "BOLA" in vuln_title.upper() or "CWE-639" in vuln_title.upper() or "CWE-306" in vuln_title.upper():
-            payload = "curl -I http://target/api/v1/users"
-            marker = "nginx"
+        if "cve-2021-23017" in vuln_lower or "nginx" in vuln_lower or "lfi" in vuln_lower or "cwe-22" in vuln_lower or "traversal" in vuln_lower:
+            return {
+                "payload": "curl -H 'Host: vulnerable' http://target/ --path-as-is ../../../etc/passwd",
+                "expected_marker": "root:x:0"
+            }
+        elif "15778" in vuln_lower or "openssh" in vuln_lower or "scp" in vuln_lower:
+            return {
+                "payload": "scp -q target:`echo AGENT_VALIDATED` /dev/null",
+                "expected_marker": "AGENT_VALIDATED_SUCCESS"
+            }
+        elif "rce" in vuln_lower or "command" in vuln_lower or "cwe-78" in vuln_lower:
+            return {
+                "payload": "; echo AGENT_VALIDATED_SUCCESS",
+                "expected_marker": "AGENT_VALIDATED_SUCCESS"
+            }
+        elif "sql" in vuln_lower or "sqli" in vuln_lower or "cwe-89" in vuln_lower:
+            return {
+                "payload": "' OR '1'='1' --",
+                "expected_marker": "syntax error near 'OR 1=1'"
+            }
+        elif "xss" in vuln_lower or "script" in vuln_lower or "cwe-79" in vuln_lower:
+            return {
+                "payload": "<script>/*canary*/alert(1)</script>",
+                "expected_marker": "<script>/*canary*/alert(1)</script>"
+            }
+        elif any(k in vuln_lower for k in ["csp", "header", "cwe-693"]):
+            return {
+                "payload": "curl -I http://target/",
+                "expected_marker": "NO_SECURITY_HEADERS_FOUND"
+            }
+        elif any(k in vuln_lower for k in ["phish", "dmarc", "spf", "email", "t1566"]):
+            return {
+                "payload": "curl -I http://target/ -H 'X-Phish-Verification: true'",
+                "expected_marker": "DMARC_POLICY_ABSENT"
+            }
+        elif any(k in vuln_lower for k in ["env", "git", "dir", "bruteforce", "cwe-538", "cwe-200"]):
+            return {
+                "payload": "curl -I http://target/.env",
+                "expected_marker": "DB_PASSWORD="
+            }
+        elif any(k in vuln_lower for k in ["api", "auth", "bola", "idor", "cwe-639", "cwe-306"]):
+            return {
+                "payload": "curl -I http://target/api/v1/users",
+                "expected_marker": '"id":'
+            }
             
         return {
-            "payload": payload,
-            "expected_marker": marker
+            "payload": "' OR '1'='1' --",
+            "expected_marker": "syntax error"
         }
 
 class ValidationAgent:
@@ -79,26 +98,25 @@ class ValidationAgent:
         # 5. Evaluate Success
         marker_match = False
         if expected_marker:
-            marker_match = (expected_marker in safe_response) or (expected_marker.lower() in safe_response.lower())
+            marker_match = expected_marker.lower() in safe_response.lower()
 
-        is_hardened_response = "Hardened Perimeter Active" in safe_response or "Server: gws" in safe_response
-        canary_match = any(m in safe_response for m in [
-            "AGENT_VALIDATED_SUCCESS",
-            "AGENT_VALIDATED",
+        is_hardened_response = "hardened perimeter active" in safe_response.lower() or "server: gws" in safe_response.lower()
+        canary_match = any(m.lower() in safe_response.lower() for m in [
+            "agent_validated_success",
             "root:x:0",
-            "syntax error",
-            "/*canary*/alert(1)",
-            "POC-DMARC-TEST-CANARY",
-            "DB_PASSWORD=",
-            "\"id\":1",
-            "nginx 1.18.0"
+            "syntax error near",
+            "<script>/*canary*/alert(1)</script>",
+            "poc-dmarc-test-canary",
+            "dmarc_policy_absent",
+            "no_security_headers_found",
+            "db_password="
         ]) and not is_hardened_response
 
         if marker_match or canary_match:
             logger.info(f"[+] SUCCESS: {vuln_record.title} is EXPLOITABLE.")
             await self._mark_validated(vuln_id, generated_payload, credentials_leaked)
         else:
-            logger.info(f"[-] FAILED: {vuln_record.title} appears unexploitable.")
+            logger.info(f"[-] FAILED: {vuln_record.title} appears unexploitable. Marked as FALSE_POSITIVE.")
             await self._mark_false_positive(vuln_id)
 
     async def _mark_validated(self, vuln_id: str, poc_payload: str, creds_leaked: bool):

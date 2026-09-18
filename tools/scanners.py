@@ -5,38 +5,57 @@ from typing import Dict, List
 
 logger = logging.getLogger("Scanners")
 
+from urllib.parse import urlparse
+from tools.api_connectors import is_mock_target
+
+def clean_target_host(target: str) -> str:
+    """Extracts raw hostname or IP from target, stripping protocol, path, and ports."""
+    t = (target or "").strip()
+    if "://" in t:
+        parsed = urlparse(t)
+        host = parsed.hostname or parsed.netloc.split(":")[0]
+        return host or t
+    return t.split("/")[0].split(":")[0]
+
 async def run_nmap(target: str) -> str:
     """
     Executes an Nmap service scan asynchronously.
     Uses strict flags to keep it fast and stealthy.
     """
-    logger.info(f"[Nmap] Starting service scan on {target}...")
+    host = clean_target_host(target)
+    logger.info(f"[Nmap] Starting service scan on host '{host}' (from '{target}')...")
     try:
         # -Pn (no ping), -sV (service versions), -F (fast top 100 ports)
         process = await asyncio.create_subprocess_exec(
-            'nmap', '-Pn', '-sV', '-F', target,
+            'nmap', '-Pn', '-sV', '-F', host,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
         stdout, stderr = await process.communicate()
         
         output_str = stdout.decode().strip()
-        if process.returncode != 0 or "Failed to resolve" in output_str or "0 hosts up" in output_str or "WARNING: No targets were specified" in output_str:
-            logger.warning(f"Target '{target}' could not be reached or resolved by Nmap. Using simulated output.")
-            return f"""
-            Starting Nmap 7.93 ( https://nmap.org )
-            Nmap scan report for {target}
-            PORT   STATE SERVICE VERSION
-            22/tcp open  ssh     OpenSSH 8.2p1 Ubuntu 4ubuntu0.1
-            80/tcp open  http    nginx 1.18.0
-            """
+        if (
+            process.returncode != 0
+            or "Failed to resolve" in output_str
+            or "0 hosts up" in output_str
+            or "WARNING: No targets were specified" in output_str
+            or "in ignored states" in output_str
+            or "open" not in output_str
+        ):
+            logger.warning(f"Target '{host}' could not be reached or resolved by Nmap. Using context-aware simulated output.")
+            if is_mock_target(target):
+                t_low = target.lower()
+                if "db" in t_low or "vault" in t_low:
+                    return f"""Starting Nmap 7.93 ( https://nmap.org )\nNmap scan report for {host}\nPORT   STATE SERVICE VERSION\n22/tcp open  ssh     OpenSSH 8.2p1 Ubuntu 4ubuntu0.1\n5432/tcp open postgresql PostgreSQL DB 13.3\n"""
+                return f"""Starting Nmap 7.93 ( https://nmap.org )\nNmap scan report for {host}\nPORT   STATE SERVICE VERSION\n22/tcp open  ssh     OpenSSH 8.2p1 Ubuntu 4ubuntu0.1\n80/tcp open  http    nginx 1.18.0\n"""
+            return f"""Starting Nmap 7.93 ( https://nmap.org )\nNmap scan report for {host}\nNote: Host appears down or protected by perimeter firewall (0 ports detected open).\n"""
             
         return output_str
     except FileNotFoundError:
         logger.warning("Nmap is not installed on this host. Using simulated output.")
         return f"""
         Starting Nmap 7.93 ( https://nmap.org )
-        Nmap scan report for {target}
+        Nmap scan report for {host}
         PORT   STATE SERVICE VERSION
         22/tcp open  ssh     OpenSSH 8.2p1 Ubuntu 4ubuntu0.1
         80/tcp open  http    nginx 1.18.0
@@ -61,6 +80,18 @@ async def query_nvd(cpe_string: str, api_key: str = None) -> List[Dict]:
                 "cve_id": "CVE-2020-15778",
                 "description": "OpenSSH scp command injection allows command execution.",
                 "cvss_score": 7.8
+            }]
+        if "apache" in cpe_lower:
+            return [{
+                "cve_id": "CVE-2021-41773",
+                "description": "Apache HTTP Server path traversal and file disclosure flaw.",
+                "cvss_score": 7.5
+            }]
+        if "log4j" in cpe_lower:
+            return [{
+                "cve_id": "CVE-2021-44228",
+                "description": "Apache Log4j2 JNDI features RCE vulnerability.",
+                "cvss_score": 10.0
             }]
         return []
 

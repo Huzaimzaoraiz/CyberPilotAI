@@ -51,3 +51,36 @@ async def test_vapt_authorized_target_discovery_flow():
     # Verify validation tasks were placed in queue
     val_tasks = [t for t in db.tasks.values() if t.target_agent == AgentType.VALIDATION]
     assert len(val_tasks) > 0
+
+@pytest.mark.asyncio
+async def test_vapt_dynamic_discovery_different_sites():
+    """Verifies that vulnerability detection counts adapt to the target surface instead of a fixed 14."""
+    # Target 1: Web application target
+    db1 = DatabaseClient()
+    asset1 = TargetAsset(
+        asset_identifier="portal.test.corp",
+        layer="Web",
+        is_authorized=True
+    )
+    await db1.insert_asset(asset1)
+    agent1 = VAPTAgent(db_client=db1, llm_client=MockLLMClient())
+    await agent1.execute_task({"asset_id": asset1.id})
+    count1 = len(db1.vulnerabilities)
+
+    # Target 2: Internal database / vault asset (Network layer, no web surface)
+    db2 = DatabaseClient()
+    asset2 = TargetAsset(
+        asset_identifier="10.0.0.54",
+        layer="Network",
+        is_authorized=True,
+        metadata={"is_crown_jewel": True}
+    )
+    await db2.insert_asset(asset2)
+    agent2 = VAPTAgent(db_client=db2, llm_client=MockLLMClient())
+    await agent2.execute_task({"asset_id": asset2.id})
+    count2 = len(db2.vulnerabilities)
+
+    # Counts must be dynamic and vary based on asset layer and surface
+    assert count1 > 0
+    assert count2 > 0
+    assert count1 != count2, f"Target counts should vary based on surface (got {count1} vs {count2})"

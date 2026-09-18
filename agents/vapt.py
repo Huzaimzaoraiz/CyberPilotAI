@@ -18,10 +18,12 @@ class MockLLMClient:
     async def extract_cpe_from_nmap(self, nmap_output: str) -> List[str]:
         cpes = []
         output_lower = nmap_output.lower()
-        if "nginx" in output_lower:
+        if "nginx" in output_lower and ("open" in output_lower or "port" in output_lower):
             cpes.append("cpe:2.3:a:f5:nginx:1.18.0:*:*:*:*:*:*:*")
-        if "openssh" in output_lower or "ssh" in output_lower:
+        if ("openssh" in output_lower or "ssh" in output_lower) and ("open" in output_lower or "port" in output_lower):
             cpes.append("cpe:2.3:a:openbsd:openssh:8.2p1:*:*:*:*:*:*:*")
+        if "apache" in output_lower and ("open" in output_lower or "port" in output_lower):
+            cpes.append("cpe:2.3:a:apache:http_server:2.4.49:*:*:*:*:*:*:*")
         return cpes
 
 class VAPTAgent:

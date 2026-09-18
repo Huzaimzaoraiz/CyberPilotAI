@@ -36,7 +36,7 @@ def is_mock_target(target: str) -> bool:
     t = (target or "").lower()
     return any(k in t for k in [
         "local", "corp", "test", "example", "mock", "internal", "sandbox", "dummy", "127.0.0.1", "localhost"
-    ])
+    ]) or t.startswith("10.") or t.startswith("192.168.") or t.startswith("172.16.") or t.startswith("172.17.") or t.startswith("172.18.") or t.startswith("172.19.") or t.startswith("172.2") or t.startswith("172.3")
 
 async def check_hibp(domain: str, api_key: str = None) -> List[Dict]:
     """

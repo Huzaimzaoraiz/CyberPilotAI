@@ -110,13 +110,9 @@ class RealLLMClient:
         logger.info("[LLM] Extracting CPEs from network scan...")
         output_lower = nmap_output.lower()
         cpes = []
-        if "nginx" in output_lower:
-            cpes.append("cpe:2.3:a:f5:nginx:1.18.0:*:*:*:*:*:*:*")
-        if "openssh" in output_lower or "ssh" in output_lower:
-            cpes.append("cpe:2.3:a:openbsd:openssh:8.2p1:*:*:*:*:*:*:*")
         
         prompt = f"""
-        Analyze this nmap scan output and return a JSON object with a 'cpes' array of standard CPE 2.3 identifiers.
+        Analyze this nmap scan output and return a JSON object with a 'cpes' array of standard CPE 2.3 identifiers for any OPEN services detected. Do not invent CPEs for filtered, closed, or undetected services.
         Raw Output:
         {nmap_output}
         Format: {{"cpes": ["cpe:2.3:a:..."]}}
@@ -126,6 +122,14 @@ class RealLLMClient:
             for cpe in data.get("cpes", []):
                 if cpe not in cpes:
                     cpes.append(cpe)
+
+        if not cpes:
+            if "nginx" in output_lower and ("open" in output_lower or "port" in output_lower):
+                cpes.append("cpe:2.3:a:f5:nginx:1.18.0:*:*:*:*:*:*:*")
+            if ("openssh" in output_lower or "ssh" in output_lower) and ("open" in output_lower or "port" in output_lower):
+                cpes.append("cpe:2.3:a:openbsd:openssh:8.2p1:*:*:*:*:*:*:*")
+            if "apache" in output_lower and ("open" in output_lower or "port" in output_lower):
+                cpes.append("cpe:2.3:a:apache:http_server:2.4.49:*:*:*:*:*:*:*")
 
         return cpes
 
@@ -163,7 +167,12 @@ class RealLLMClient:
                 "payload": "curl -H 'Host: vulnerable' http://target/ --path-as-is ../../../etc/passwd",
                 "expected_marker": "root:x:0"
             }
-        elif "rce" in vuln_lower or "command" in vuln_lower or "15778" in vuln_lower or "openssh" in vuln_lower or "cwe-78" in vuln_lower:
+        elif "15778" in vuln_lower or "openssh" in vuln_lower or "scp" in vuln_lower:
+            return {
+                "payload": "scp -q target:`echo AGENT_VALIDATED` /dev/null",
+                "expected_marker": "AGENT_VALIDATED_SUCCESS"
+            }
+        elif "rce" in vuln_lower or "command" in vuln_lower or "cwe-78" in vuln_lower:
             return {
                 "payload": "; echo AGENT_VALIDATED_SUCCESS",
                 "expected_marker": "AGENT_VALIDATED_SUCCESS"
@@ -171,22 +180,22 @@ class RealLLMClient:
         elif any(k in vuln_lower for k in ["env", "git", "dir", "bruteforce", "cwe-538", "cwe-200"]):
             return {
                 "payload": "curl -I http://target/.env",
-                "expected_marker": "nginx"
+                "expected_marker": "DB_PASSWORD="
             }
         elif any(k in vuln_lower for k in ["api", "auth", "bola", "idor", "cwe-639", "cwe-306"]):
             return {
                 "payload": "curl -I http://target/api/v1/users",
-                "expected_marker": "nginx"
+                "expected_marker": '"id":'
             }
         elif any(k in vuln_lower for k in ["phish", "dmarc", "spf", "email", "t1566"]):
             return {
                 "payload": "curl -I http://target/ -H 'X-Phish-Verification: true'",
-                "expected_marker": "nginx"
+                "expected_marker": "DMARC_POLICY_ABSENT"
             }
         elif any(k in vuln_lower for k in ["csp", "header", "cwe-693"]):
             return {
                 "payload": "curl -I http://target/",
-                "expected_marker": "nginx"
+                "expected_marker": "NO_SECURITY_HEADERS_FOUND"
             }
         return {
             "payload": "' OR 1=1 --",
