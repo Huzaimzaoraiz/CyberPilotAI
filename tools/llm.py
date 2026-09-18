@@ -32,9 +32,9 @@ class RealLLMClient:
         from core.config import settings
         resolved_key = api_key or settings.LLM_API_KEY or "none"
         resolved_base_url = base_url or settings.LLM_BASE_URL or None
-        self.model = model or settings.LLM_MODEL or "gemini-3.5-flash"
+        self.model = model or settings.LLM_MODEL or "gemini-3.6-flash"
         self.fallback_models = fallback_models or getattr(settings, "LLM_FALLBACK_MODELS", [
-            "gemini-3.5-flash", "gemini-flash-latest", "gemini-3.5-flash-lite", "gpt-4o-mini"
+            "gemini-3.6-flash", "gemini-3.1-flash-lite", "gemini-flash-latest", "gpt-4o-mini"
         ])
         
         client_kwargs = {"api_key": resolved_key, "max_retries": 0}
@@ -134,11 +134,20 @@ class RealLLMClient:
         return cpes
 
     # --- 2. Validation Agent Ability ---
-    async def generate_safe_poc(self, vuln_title: str) -> Dict[str, str]:
+    async def generate_safe_poc(self, vuln_title: str, vuln_context: Dict[str, Any] = None) -> Dict[str, str]:
         logger.info(f"[LLM] Crafting safe PoC for {vuln_title}...")
+        ctx_info = ""
+        if vuln_context:
+            if vuln_context.get("test_payload") and vuln_context.get("expected_marker"):
+                return {
+                    "payload": str(vuln_context["test_payload"]),
+                    "expected_marker": str(vuln_context["expected_marker"])
+                }
+            ctx_info = f"\nContext details: {json.dumps(vuln_context)}"
+
         prompt = f"""
         You are a penetration testing AI. Generate a completely safe, benign 
-        Proof-of-Concept payload for this vulnerability: {vuln_title}
+        Proof-of-Concept payload for this vulnerability: {vuln_title}{ctx_info}
         
         Rules:
         - NEVER use destructive commands (rm, drop, delete, update).

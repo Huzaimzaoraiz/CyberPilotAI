@@ -7,7 +7,13 @@ logger = logging.getLogger("ValidationAgent")
 
 class MockValidationLLM:
     """Simulates an LLM generating a safe PoC based on vulnerability context."""
-    async def generate_safe_poc(self, vuln_title: str) -> Dict[str, str]:
+    async def generate_safe_poc(self, vuln_title: str, vuln_context: Dict[str, Any] = None) -> Dict[str, str]:
+        if vuln_context and vuln_context.get("test_payload") and vuln_context.get("expected_marker"):
+            return {
+                "payload": str(vuln_context["test_payload"]),
+                "expected_marker": str(vuln_context["expected_marker"])
+            }
+
         vuln_lower = vuln_title.lower()
         
         if "cve-2021-23017" in vuln_lower or "nginx" in vuln_lower or "lfi" in vuln_lower or "cwe-22" in vuln_lower or "traversal" in vuln_lower:
@@ -39,6 +45,16 @@ class MockValidationLLM:
             return {
                 "payload": "curl -I http://target/",
                 "expected_marker": "NO_SECURITY_HEADERS_FOUND"
+            }
+        elif any(k in vuln_lower for k in ["cleartext", "tls", "cwe-319"]):
+            return {
+                "payload": "curl -I http://target/ (Check Cleartext HTTP Transmission)",
+                "expected_marker": "CLEARTEXT_HTTP_TRANSMISSION_CONFIRMED"
+            }
+        elif any(k in vuln_lower for k in ["sri", "integrity", "cwe-353"]):
+            return {
+                "payload": "curl -s http://target/ (Check Subresource Integrity)",
+                "expected_marker": "SRI_INTEGRITY_MISSING"
             }
         elif any(k in vuln_lower for k in ["phish", "dmarc", "spf", "email", "t1566"]):
             return {
@@ -77,25 +93,35 @@ class ValidationAgent:
         logger.info(f"Validating: {vuln_record.title}")
         asset = await self.db.get_asset(vuln_record.asset_id)
 
-        # 1. LLM Generates Benign Proof-of-Concept
-        poc_data = await self.llm.generate_safe_poc(vuln_record.title)
-        generated_payload = poc_data["payload"]
-        expected_marker = poc_data["expected_marker"]
+        # 1. Prepare Vulnerability Context (reuse verified payloads / markers from discovery)
+        vuln_context = dict(vuln_record.metadata or {})
+        if payload.get("test_payload") and payload.get("expected_marker"):
+            vuln_context["test_payload"] = payload["test_payload"]
+            vuln_context["expected_marker"] = payload["expected_marker"]
 
-        # 2. Strict Safety Gate Check
+        # 2. LLM Generates Benign Proof-of-Concept
+        try:
+            poc_data = await self.llm.generate_safe_poc(vuln_record.title, vuln_context=vuln_context)
+        except TypeError:
+            poc_data = await self.llm.generate_safe_poc(vuln_record.title)
+
+        generated_payload = poc_data.get("payload", "' OR '1'='1' --")
+        expected_marker = poc_data.get("expected_marker", "syntax error")
+
+        # 3. Strict Safety Gate Check
         is_safe, reason = SafetyValidator.validate_payload(generated_payload)
         if not is_safe:
             logger.warning(f"Validation aborted for {vuln_id}: {reason}")
             await self._mark_false_positive(vuln_id)
             return
 
-        # 3. Execute in Sandbox
+        # 4. Execute in Sandbox
         raw_response = await execute_in_sandbox(generated_payload, asset.asset_identifier)
 
-        # 4. Data Sanitization (Scrub credentials before evaluating)
+        # 5. Data Sanitization (Scrub credentials before evaluating)
         safe_response, credentials_leaked = DataSanitizer.scrub_response(raw_response)
 
-        # 5. Evaluate Success
+        # 6. Evaluate Success
         marker_match = False
         if expected_marker:
             marker_match = expected_marker.lower() in safe_response.lower()
@@ -109,7 +135,9 @@ class ValidationAgent:
             "poc-dmarc-test-canary",
             "dmarc_policy_absent",
             "no_security_headers_found",
-            "db_password="
+            "db_password=",
+            "cleartext_http_transmission_confirmed",
+            "sri_integrity_missing"
         ]) and not is_hardened_response
 
         if marker_match or canary_match:

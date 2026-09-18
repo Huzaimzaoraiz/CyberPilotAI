@@ -90,8 +90,24 @@ async def execute_in_sandbox(payload: str, target: str) -> str:
             import httpx
             probe_url = target if target.startswith("http://") or target.startswith("https://") else f"https://{target}"
             
+            # 1. Cleartext HTTP / Missing TLS verification
+            if "cleartext" in payload.lower() or "missing tls" in payload.lower() or "transmission" in payload.lower():
+                async with httpx.AsyncClient(verify=False, timeout=3.0, follow_redirects=False) as c_plain:
+                    resp = await c_plain.get(probe_url)
+                    if str(resp.url).startswith("http://") and resp.status_code == 200:
+                        return f"HTTP/1.1 200 OK\n\nCLEARTEXT_HTTP_TRANSMISSION_CONFIRMED: Cleartext HTTP accepted on {probe_url}"
+                    elif resp.status_code in [301, 302, 308] and resp.headers.get("location", "").startswith("https://"):
+                        return f"HTTP/1.1 {resp.status_code} Redirect\nLocation: {resp.headers.get('location')}\n\nHARDENED: HTTPS redirect enforced"
+
             async with httpx.AsyncClient(verify=False, timeout=3.0, follow_redirects=True) as client:
-                # 1. Header / CSP verification
+                # 2. Subresource Integrity (SRI) check
+                if "sri" in payload.lower() or "integrity" in payload.lower():
+                    resp = await client.get(probe_url)
+                    if "<script" in resp.text and "integrity=" not in resp.text:
+                        return f"HTTP/1.1 200 OK\n\nSRI_INTEGRITY_MISSING: External script found without integrity hash"
+                    return f"HTTP/1.1 200 OK\n\nAll external scripts secured with integrity attributes"
+
+                # 3. Header / CSP verification
                 if "curl -i" in payload.lower() or "header" in payload.lower() or "csp" in payload.lower():
                     resp = await client.get(probe_url)
                     headers_lower = {k.lower(): v for k, v in resp.headers.items()}
@@ -106,7 +122,7 @@ async def execute_in_sandbox(payload: str, target: str) -> str:
                         return f"HTTP/1.1 200 OK\nServer: {headers_lower.get('server', 'web')}\n\nNO_SECURITY_HEADERS_FOUND: Missing {', '.join(missing)}"
                     return f"HTTP/1.1 200 OK\nServer: {headers_lower.get('server', 'web')}\n\nAll security headers active"
 
-                # 2. Sensitive path probe (.env, .git, admin)
+                # 4. Sensitive path probe (.env, .git, admin)
                 if any(p in payload for p in [".env", ".git", "swagger", "admin", "api"]):
                     path = "/"
                     for p in payload.split():
@@ -119,18 +135,18 @@ async def execute_in_sandbox(payload: str, target: str) -> str:
                         return f"HTTP/1.1 200 OK\nContent-Type: text/plain\n\nDB_PASSWORD=supersecret\n{resp.text[:500]}"
                     return f"HTTP/1.1 {resp.status_code} Access Denied\n\nEndpoint not exposed"
 
-                # 3. Web injection probe (SQLi / XSS)
+                # 5. Web injection probe (SQLi / XSS)
                 if any(k in payload for k in ["1=1", "OR", "script", "alert"]):
                     resp = await client.get(f"{probe_url}?q={payload[:30]}")
                     if "<script>/*canary*/alert(1)</script>" in resp.text:
                         return f"HTTP/1.1 200 OK\n\n<html><body><script>/*canary*/alert(1)</script></body></html>"
                     return resp.text[:1000]
 
-                # 4. Phishing / DMARC verification
+                # 6. Phishing / DMARC verification
                 if "phish" in payload.lower() or "dmarc" in payload.lower():
                     return "HTTP/1.1 200 OK\n\nDMARC_POLICY_ABSENT"
 
-                # 5. Remote binary/system exploits (OpenSSH / RCE / memory corruption)
+                # 7. Remote binary/system exploits (OpenSSH / RCE / memory corruption)
                 return "HTTP/1.1 403 Forbidden\nAccess Denied - Remote exploit rejected"
         except Exception as e:
             logger.warning(f"[Sandbox] Live network probe failed: {e}")
@@ -146,32 +162,42 @@ async def execute_in_sandbox(payload: str, target: str) -> str:
     if "echo AGENT" in payload or "AGENT_VALIDATED" in payload or "whoami" in payload or "id" in payload:
         return "root\nAGENT_VALIDATED_SUCCESS\nuid=0(root) gid=0(root)"
 
-    # 2. LFI / Nginx memory overwrite:
+    # 2. LFI / Nginx memory overwrite / component traversal:
     if any(k in payload for k in ["etc/passwd", "metadata", "path-as-is", "passwd", "23017", "traversal"]):
         return "HTTP/1.1 200 OK\nServer: nginx/1.18.0\n\nroot:x:0:0:root:/root:/bin/bash\nAKIAIOSFODNN7EXAMPLE"
 
-    # 3. SQL Injection:
+    # 3. Cleartext HTTP / Missing TLS:
+    if "cleartext" in payload.lower() or "missing tls" in payload.lower() or "transmission" in payload.lower():
+        if "insecure" in target.lower() or "cleartext" in target.lower() or "http://" in payload.lower():
+            return "HTTP/1.1 200 OK\n\nCLEARTEXT_HTTP_TRANSMISSION_CONFIRMED: Cleartext HTTP transmission accepted"
+        return "HTTP/1.1 301 Moved Permanently\nLocation: https://target\n\nHARDENED: HTTPS redirect enforced"
+
+    # 4. Subresource Integrity (SRI):
+    if "sri" in payload.lower() or "integrity" in payload.lower():
+        return "HTTP/1.1 200 OK\n\nSRI_INTEGRITY_MISSING: External script found without integrity hash"
+
+    # 5. SQL Injection:
     if any(k in payload for k in ["1=1", "OR", "union", "UNION", "syntax error"]):
         return "HTTP/1.1 200 OK\nServer: nginx/1.18.0\n\nDatabase error: syntax error near 'OR 1=1' in query\ninformation_schema\nroot"
 
-    # 4. XSS:
+    # 6. XSS:
     # Target application employs context-aware HTML escaping -> False Positive!
     if any(k in payload for k in ["<script>", "alert(", "canary"]):
         return "HTTP/1.1 200 OK\nServer: nginx/1.18.0\nContent-Type: text/html\n\n<html><body><div id='search-results'>Query: &lt;script&gt;/*canary*/alert(1)&lt;/script&gt;</div></body></html>"
 
-    # 5. Sensitive File / .env probe:
+    # 7. Sensitive File / .env probe:
     if ".env" in payload:
         return "HTTP/1.1 200 OK\nServer: nginx/1.18.0\nContent-Type: text/plain\n\nDB_PASSWORD=supersecret\nDB_USER=admin\n\"id\":1"
 
-    # 6. Missing Security Headers (CSP / HSTS):
+    # 8. Missing Security Headers (CSP / HSTS):
     if "curl -i" in payload.lower() or "header" in payload.lower() or "csp" in payload.lower():
         return "HTTP/1.1 200 OK\nServer: nginx/1.18.0\n\nNO_SECURITY_HEADERS_FOUND: Content-Security-Policy and X-Frame-Options headers absent"
 
-    # 7. API IDOR / BOLA:
+    # 9. API IDOR / BOLA:
     if "api" in payload.lower() or "users" in payload.lower():
         return "HTTP/1.1 200 OK\nContent-Type: application/json\n\n[{\"id\": 1, \"username\": \"admin\", \"role\": \"superuser\"}]"
 
-    # 8. DMARC:
+    # 10. DMARC:
     if "phish" in payload.lower() or "dmarc" in payload.lower():
         return "HTTP/1.1 200 OK\n\nDMARC_POLICY_ABSENT: Domain lacks p=reject policy"
 

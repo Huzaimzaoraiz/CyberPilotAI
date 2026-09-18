@@ -5,15 +5,15 @@ from dotenv import load_dotenv
 load_dotenv()
 
 class Settings:
-    # LLM Settings (Configured for Google Gemini 3.5 Flash-Lite)
+    # LLM Settings (Configured for Google Gemini 3.6 Flash)
     LLM_API_KEY: str = os.getenv("LLM_API_KEY", os.getenv("OPENAI_API_KEY", ""))
     LLM_BASE_URL: str = os.getenv("LLM_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/")
-    LLM_MODEL: str = os.getenv("LLM_MODEL", "gemini-3.5-flash")
+    LLM_MODEL: str = os.getenv("LLM_MODEL", "gemini-3.6-flash")
     # Fallback models ordered by priority when encountering HTTP 429 / rate limits / quota exhaustion
     LLM_FALLBACK_MODELS: list = [
         m.strip() for m in os.getenv(
             "LLM_FALLBACK_MODELS", 
-            "gemini-3.5-flash,gemini-flash-latest,gemini-3.5-flash-lite,gpt-4o-mini"
+            "gemini-3.6-flash,gemini-3.1-flash-lite,gemini-flash-latest,gpt-4o-mini"
         ).split(",") if m.strip()
     ]
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")

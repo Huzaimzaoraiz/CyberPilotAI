@@ -122,3 +122,43 @@ async def test_posture_score_excludes_false_positives():
     assert score["validated_findings_count"] == 0
     # A single false positive with zero validated findings should not degrade grade to F
     assert score["posture_grade"] in ("A", "B")
+
+@pytest.mark.asyncio
+async def test_validation_agent_validates_vapt_discovered_vulnerabilities():
+    """
+    Verifies that the Validation Agent receives context from the VAPT agent's discovery tasks
+    and successfully validates genuine exploitable vulnerabilities while marking defenses as false positives.
+    """
+    from agents.vapt import VAPTAgent, MockLLMClient
+    db = DatabaseClient()
+    asset = TargetAsset(
+        asset_identifier="portal.test.corp",
+        layer="Web",
+        is_authorized=True
+    )
+    await db.insert_asset(asset)
+
+    # 1. Run VAPT discovery
+    vapt_agent = VAPTAgent(db_client=db, llm_client=MockLLMClient())
+    await vapt_agent.execute_task({"asset_id": asset.id})
+
+    # Ensure findings and validation tasks were queued
+    assert len(db.vulnerabilities) > 0
+    val_tasks = [t for t in db.tasks.values() if t.target_agent == AgentType.VALIDATION]
+    assert len(val_tasks) > 0
+
+    # 2. Run ValidationAgent on all queued tasks
+    val_agent = ValidationAgent(db_client=db, llm_client=MockValidationLLM())
+    for task in val_tasks:
+        await val_agent.execute_task(task.payload)
+
+    # 3. Check status of validated vulnerabilities
+    validated = [v for v in db.vulnerabilities.values() if v.status == VulnStatus.VALIDATED]
+    false_positives = [v for v in db.vulnerabilities.values() if v.status == VulnStatus.FALSE_POSITIVE]
+
+    assert len(validated) > 0, "Validation agent must successfully validate exploitable vulnerabilities"
+    assert len(false_positives) > 0, "Validation agent must correctly isolate false positives"
+    # Ensure no findings remain stuck in UNVALIDATED
+    unvalidated = [v for v in db.vulnerabilities.values() if v.status == VulnStatus.UNVALIDATED]
+    assert len(unvalidated) == 0, "All queued vulnerabilities should be processed"
+

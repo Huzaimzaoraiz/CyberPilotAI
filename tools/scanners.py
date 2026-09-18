@@ -127,7 +127,8 @@ from tools.vuln_scanner_mcp import (
     tool_scan_phishing,
     tool_dlr_bruteforce,
     tool_api_endpoint_scanner,
-    tool_mitre_mapper
+    tool_mitre_mapper,
+    tool_scan_owasp_top10
 )
 
 async def scan_web_vulnerabilities(target: str) -> List[Dict]:
@@ -137,6 +138,13 @@ async def scan_web_vulnerabilities(target: str) -> List[Dict]:
     logger.info(f"[WebScanner] Auditing web application surface on {target}...")
     result = await tool_scan_web_vulnerabilities(target, check_injection=True)
     return result.get("vulnerabilities", [])
+
+async def scan_owasp_top10(target: str) -> Dict:
+    """
+    Performs an end-to-end security architecture and risk audit against the OWASP Top 10 (2021) categories (A01 through A10).
+    """
+    logger.info(f"[OWASPTop10] Auditing target {target} against OWASP Top 10 (2021)...")
+    return await tool_scan_owasp_top10(target)
 
 async def scan_code_sast(path_or_code: str) -> List[Dict]:
     """

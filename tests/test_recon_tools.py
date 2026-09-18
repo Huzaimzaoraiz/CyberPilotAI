@@ -81,3 +81,23 @@ def test_dir_bruteforce_schema():
     assert "paths_probed" in res
     assert isinstance(res["discovered_endpoints"], list)
     assert res["source"] == "tool"
+
+@pytest.mark.asyncio
+async def test_scan_owasp_top10_schema():
+    from tools.scanners import scan_owasp_top10
+    res = await scan_owasp_top10("portal.test.corp")
+    assert isinstance(res, dict)
+    assert res["owasp_version"] == "2021"
+    assert "categories_covered" in res
+    assert len(res["categories_covered"]) == 10
+    assert "A01:2021-Broken Access Control" in res["categories_covered"]
+    assert "A10:2021-Server-Side Request Forgery (SSRF)" in res["categories_covered"]
+    assert "vulnerabilities" in res
+    assert isinstance(res["vulnerabilities"], list)
+    for v in res["vulnerabilities"]:
+        assert "title" in v
+        assert "cwe_id" in v
+        assert "owasp_category" in v
+        assert "test_payload" in v
+        assert "expected_marker" in v
+
