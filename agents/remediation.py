@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, List
 from core.models import RemediationPlan, VulnerabilityRecord
 
 logger = logging.getLogger("RemediationAgent")
@@ -81,6 +81,73 @@ class MockRemediationLLM:
         }
 
 MockLLMClient = MockRemediationLLM
+
+def root_cause_analyzer(finding: Dict[str, Any]) -> str:
+    """Explains why the vulnerability exists based on finding context."""
+    title = str(finding.get("title", "")).lower()
+    if "sql" in title or "cwe-89" in title:
+        return "Untrusted user input concatenated directly into raw database query string without parameter binding (CWE-89)."
+    elif "xss" in title or "cwe-79" in title:
+        return "User input reflected into DOM context without contextual HTML entity encoding or CSP protection (CWE-79)."
+    elif "csp" in title or "hsts" in title or "header" in title:
+        return "Missing foundational HTTP response security headers in web server configuration (CWE-693)."
+    elif "nginx" in title or "23017" in title:
+        return "Outdated component with known 1-byte DNS memory corruption vulnerability."
+    return finding.get("remediation", "Improper input validation or insecure system default configuration.")
+
+def fix_generator(finding: Dict[str, Any], cve_id: str = None) -> Dict[str, Any]:
+    """Generates remediation code or configuration fix suggestions."""
+    title = str(finding.get("title", "")).lower()
+    if "sql" in title or "cwe-89" in title:
+        return {
+            "patch_type": "code",
+            "fix": "cursor.execute('SELECT * FROM users WHERE id = %s', (user_id,))",
+            "guidance": "Bind all variables using parameterized queries or prepared statements."
+        }
+    elif "xss" in title or "cwe-79" in title:
+        return {
+            "patch_type": "code",
+            "fix": "element.textContent = sanitize(userInput);",
+            "guidance": "Enforce context-aware HTML entity escaping and Content-Security-Policy."
+        }
+    elif "csp" in title or "header" in title:
+        return {
+            "patch_type": "configuration",
+            "fix": "add_header Content-Security-Policy \"default-src 'self'\";\nadd_header Strict-Transport-Security \"max-age=31536000\";",
+            "guidance": "Add standard HTTP security headers in web server config."
+        }
+    return {
+        "patch_type": "configuration",
+        "fix": finding.get("remediation", "# Review component configuration and apply vendor patches."),
+        "guidance": "Consult vendor advisory and upgrade component."
+    }
+
+def patch_prioritizer(attack_paths: List[Any], vulnerabilities: List[Any] = None) -> List[Dict[str, Any]]:
+    """Orders remediation fixes by attack path impact and chokepoint priority."""
+    prioritized = []
+    # Identify chokepoints from attack paths first
+    chokepoint_ids = set()
+    for p in (attack_paths or []):
+        p_dict = p if isinstance(p, dict) else getattr(p, "dict", lambda: {})()
+        choke = p_dict.get("chokepoint_node")
+        if choke:
+            chokepoint_ids.add(choke.replace("VULN:", ""))
+
+    for v in (vulnerabilities or []):
+        v_dict = v if isinstance(v, dict) else (v.dict() if hasattr(v, "dict") else vars(v))
+        vid = v_dict.get("id")
+        is_choke = vid in chokepoint_ids
+        score = float(v_dict.get("criticality_score", 5.0)) + (3.0 if is_choke else 0.0)
+        prioritized.append({
+            "vuln_id": vid,
+            "title": v_dict.get("title"),
+            "priority_score": round(score, 1),
+            "is_strategic_chokepoint": is_choke,
+            "fix": fix_generator(v_dict)
+        })
+
+    prioritized.sort(key=lambda x: x["priority_score"], reverse=True)
+    return prioritized
 
 
 class RemediationAgent:

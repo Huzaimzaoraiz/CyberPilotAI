@@ -1,13 +1,19 @@
+import asyncio
 import logging
 from typing import Dict, Any, List
 from core.models import TargetAsset, VulnerabilityRecord, VulnStatus, TaskItem, AgentType
 from tools.scanners import (
     run_nmap,
+    port_scanner,
+    service_fingerprint,
+    web_crawler,
+    header_analyzer,
+    ssl_checker,
+    dir_bruteforce,
+    api_endpoint_scanner,
     query_nvd,
     scan_web_vulnerabilities,
     scan_phishing,
-    run_dlr_bruteforce,
-    scan_api_endpoints,
     scan_owasp_top10,
     map_to_mitre
 )
@@ -32,9 +38,10 @@ class VAPTAgent:
         self.db = db_client
         self.llm = llm_client
         self.nvd_api_key = nvd_api_key
+        self._seen_titles = set()
 
     async def execute_task(self, payload: Dict[str, Any]):
-        """The main execution flow for Recon and Discovery."""
+        """The main fast, concurrent execution flow for Recon and Discovery."""
         asset_id = payload.get("asset_id")
         
         # 1. ENFORCE SCOPE (Critical Security Boundary)
@@ -50,50 +57,79 @@ class VAPTAgent:
         target = asset.asset_identifier
         logger.info(f"Starting VAPT scan on authorized target: {target}")
 
-        # 2. Network Reconnaissance
-        nmap_output = await run_nmap(target)
+        # 2. Concurrently execute network and web reconnaissance
+        is_web = asset.layer in ["Web", "Cloud"] or "http" in target.lower() or any(c.isalpha() for c in target)
+
+        # Network scan task
+        network_task = asyncio.create_task(port_scanner(target))
+
+        # Web scan tasks (if web surface)
+        web_tasks = []
+        if is_web:
+            web_tasks.append(asyncio.create_task(web_crawler(target)))
+            web_tasks.append(asyncio.create_task(header_analyzer(target)))
+            web_tasks.append(asyncio.create_task(ssl_checker(target)))
+            web_tasks.append(asyncio.create_task(scan_owasp_top10(target)))
+            web_tasks.append(asyncio.create_task(dir_bruteforce(target)))
+            web_tasks.append(asyncio.create_task(api_endpoint_scanner(target)))
+            web_tasks.append(asyncio.create_task(scan_phishing(target)))
+
+        # Wait for network scan
+        nmap_output = await network_task
         if nmap_output:
-            # 3. LLM Parsing (Convert messy text to structured Common Platform Enumerations)
             cpe_list = await self.llm.extract_cpe_from_nmap(nmap_output)
             logger.info(f"LLM extracted {len(cpe_list)} services for vulnerability correlation.")
-
-            # 4. Threat Intel Cross-referencing
             for cpe in cpe_list:
                 vulnerabilities = await query_nvd(cpe, self.nvd_api_key)
                 for vuln in vulnerabilities:
                     await self._queue_validation_task(asset.id, cpe, vuln)
 
-        # 5. Web Application Vulnerability Discovery (SQLi, XSS, Security Headers, CORS, OWASP Top 10)
-        if asset.layer in ["Web", "Cloud"] or "http" in target.lower() or any(c.isalpha() for c in target):
-            logger.info(f"[VAPT] Auditing web application vulnerabilities (SQLi, XSS, Headers) on {target}...")
-            web_findings = await scan_web_vulnerabilities(target)
-            for w_vuln in web_findings:
-                await self._queue_web_validation_task(asset.id, w_vuln, source="TOOL_WEB_SCANNER")
+        # Wait for all web tasks concurrently
+        if web_tasks:
+            results = await asyncio.gather(*web_tasks, return_exceptions=True)
+            crawler_res = results[0] if len(results) > 0 and not isinstance(results[0], Exception) else {}
+            header_res = results[1] if len(results) > 1 and not isinstance(results[1], Exception) else {}
+            ssl_res = results[2] if len(results) > 2 and not isinstance(results[2], Exception) else {}
+            owasp_res = results[3] if len(results) > 3 and not isinstance(results[3], Exception) else {}
+            dir_res = results[4] if len(results) > 4 and not isinstance(results[4], Exception) else {}
+            api_res = results[5] if len(results) > 5 and not isinstance(results[5], Exception) else {}
+            phish_res = results[6] if len(results) > 6 and not isinstance(results[6], Exception) else {}
 
-            # 6. OWASP Top 10 Security Architecture & Risk Audit (scan_owasp_top10)
-            logger.info(f"[VAPT] Auditing OWASP Top 10 (2021) categories on {target}...")
-            owasp_res = await scan_owasp_top10(target)
-            for o_vuln in owasp_res.get("vulnerabilities", []):
-                await self._queue_web_validation_task(asset.id, o_vuln, source="TOOL_OWASP_TOP10")
+            # Process crawler findings (SQLi, XSS, etc.)
+            if isinstance(crawler_res, dict):
+                for c_vuln in crawler_res.get("vulnerabilities", []):
+                    await self._queue_web_validation_task(asset.id, c_vuln, source="TOOL_WEB_CRAWLER")
 
-            # 7. Sensitive Directory & File Discovery (dlr_bruteforce)
-            logger.info(f"[VAPT] Running directory & sensitive file bruteforce (dlr_bruteforce) on {target}...")
-            dir_res = await run_dlr_bruteforce(target)
-            for d_vuln in dir_res.get("vulnerabilities", []):
-                await self._queue_web_validation_task(asset.id, d_vuln, source="TOOL_DLR_BRUTEFORCE")
+            # Process header findings
+            if isinstance(header_res, dict):
+                for h_vuln in header_res.get("vulnerabilities", []):
+                    await self._queue_web_validation_task(asset.id, h_vuln, source="TOOL_HEADER_ANALYZER")
 
-            # 8. API Endpoint & Authorization Scanner (api_endpoint_scanner)
-            logger.info(f"[VAPT] Auditing API surfaces & authentication (api_endpoint_scanner) on {target}...")
-            api_res = await scan_api_endpoints(target)
-            for a_vuln in api_res.get("vulnerabilities", []):
-                await self._queue_web_validation_task(asset.id, a_vuln, source="TOOL_API_SCANNER")
+            # Process SSL findings
+            if isinstance(ssl_res, dict):
+                for s_vuln in ssl_res.get("vulnerabilities", []):
+                    await self._queue_web_validation_task(asset.id, s_vuln, source="TOOL_SSL_CHECKER")
 
-            # 9. Email Security & Phishing Risk Scoring (scan_phishing)
-            logger.info(f"[VAPT] Auditing email domain authentication & phishing exposure on {target}...")
-            phish_res = await scan_phishing(target)
-            for p_vuln in phish_res.get("vulnerabilities", []):
-                p_vuln["phishing_score"] = phish_res.get("phishing_score", 45)
-                await self._queue_web_validation_task(asset.id, p_vuln, source="TOOL_PHISHING_DETECTOR", layer="Email/OSINT")
+            # Process OWASP Top 10 findings
+            if isinstance(owasp_res, dict):
+                for o_vuln in owasp_res.get("vulnerabilities", []):
+                    await self._queue_web_validation_task(asset.id, o_vuln, source="TOOL_OWASP_TOP10")
+
+            # Process Directory findings
+            if isinstance(dir_res, dict):
+                for d_vuln in dir_res.get("vulnerabilities", []):
+                    await self._queue_web_validation_task(asset.id, d_vuln, source="TOOL_DLR_BRUTEFORCE")
+
+            # Process API findings
+            if isinstance(api_res, dict):
+                for a_vuln in api_res.get("vulnerabilities", []):
+                    await self._queue_web_validation_task(asset.id, a_vuln, source="TOOL_API_SCANNER")
+
+            # Process Phishing findings
+            if isinstance(phish_res, dict):
+                for p_vuln in phish_res.get("vulnerabilities", []):
+                    p_vuln["phishing_score"] = phish_res.get("phishing_score", 45)
+                    await self._queue_web_validation_task(asset.id, p_vuln, source="TOOL_PHISHING_DETECTOR", layer="Email/OSINT")
 
         logger.info(f"VAPT scan complete for {target}.")
 
@@ -145,8 +181,16 @@ class VAPTAgent:
     async def _queue_web_validation_task(self, asset_id: str, vuln: Dict, source: str = "TOOL_WEB_SCANNER", layer: str = "Web"):
         """Creates the DB record for web vulnerabilities (SQLi, XSS, headers, API, directory, phishing, OWASP) and queues for validation."""
         title = vuln.get("title", "Web Application Flaw")
-        cvss_score = float(vuln.get("cvss_score", 7.5))
         cwe_id = vuln.get("cwe_id", "CWE-Web")
+        norm_title = f"{title} ({cwe_id})"
+
+        if not hasattr(self, "_seen_titles"):
+            self._seen_titles = set()
+        if (asset_id, norm_title) in self._seen_titles:
+            return
+        self._seen_titles.add((asset_id, norm_title))
+
+        cvss_score = float(vuln.get("cvss_score", 7.5))
         mitre_data = map_to_mitre(f"{title} {cwe_id} {vuln.get('mitre_technique', '')}")
         
         meta = {

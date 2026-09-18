@@ -3,8 +3,80 @@ import math
 import networkx as nx
 from typing import Dict, Any, List, Tuple, Set, Optional
 from core.models import TargetAsset, VulnerabilityRecord, AttackPath, VulnStatus
+from tools.vuln_scanner_mcp import tool_mitre_mapper
 
 logger = logging.getLogger("AttackPathAgent")
+
+mitre_mapper = tool_mitre_mapper
+
+def graph_builder(validated_findings: List[VulnerabilityRecord], assets: Optional[List[TargetAsset]] = None) -> nx.DiGraph:
+    """Constructs a NetworkX directed attack graph from validated findings and assets."""
+    G = nx.DiGraph()
+    G.add_node("INTERNET", label="Public Internet", node_type="source")
+    
+    asset_map = {a.id: a for a in (assets or [])}
+    for vuln in validated_findings:
+        v_id = f"VULN:{vuln.id}"
+        G.add_node(v_id, label=vuln.title, vuln=vuln, node_type="vulnerability")
+        if vuln.layer in ["Web", "Network", "OSINT"]:
+            G.add_edge("INTERNET", v_id, probability=0.9, reason="Direct external exposure")
+        if assets:
+            a = asset_map.get(vuln.asset_id)
+            if a and a.metadata.get("is_crown_jewel"):
+                G.add_node(f"JEWEL:{a.id}", label=f"Crown Jewel: {a.asset_identifier}", node_type="target")
+                G.add_edge(v_id, f"JEWEL:{a.id}", probability=0.85, reason="Crown jewel compromise")
+    return G
+
+def path_ranker(graph: nx.DiGraph) -> List[Dict[str, Any]]:
+    """Ranks attack paths by cumulative risk and Bayesian probability."""
+    ranked = []
+    if "INTERNET" not in graph:
+        return ranked
+    targets = [n for n in graph.nodes if n.startswith("JEWEL:") or graph.out_degree(n) == 0]
+    for target in targets:
+        if target == "INTERNET":
+            continue
+        try:
+            for path in nx.all_simple_paths(graph, "INTERNET", target, cutoff=6):
+                prob = 1.0
+                for u, v in zip(path[:-1], path[1:]):
+                    edata = graph.get_edge_data(u, v) or {}
+                    prob *= edata.get("probability", 0.85)
+                ranked.append({
+                    "path": path,
+                    "cumulative_probability": round(prob, 4),
+                    "steps": len(path) - 1,
+                    "target": target
+                })
+        except Exception:
+            pass
+    ranked.sort(key=lambda x: x["cumulative_probability"], reverse=True)
+    return ranked
+
+def break_chain_analyzer(graph: nx.DiGraph) -> Dict[str, Any]:
+    """Finds which single node removal severs the maximum number of attack paths (chokepoint analysis)."""
+    vuln_nodes = [n for n in graph.nodes if n.startswith("VULN:")]
+    if not vuln_nodes:
+        return {"chokepoint_node": None, "paths_severed": 0, "strategic_recommendation": "No active attack paths."}
+    
+    initial_paths = len(path_ranker(graph))
+    best_node = None
+    max_severed = -1
+    
+    for v in vuln_nodes:
+        H = graph.copy()
+        H.remove_node(v)
+        remaining = len(path_ranker(H))
+        severed = initial_paths - remaining
+        if severed > max_severed:
+            max_severed = severed
+            best_node = v
+            
+    return {
+        "chokepoint_node": best_node,
+        "paths_severed": max_severed,
+        "strategic_recommendation": f"Remediate {best_node} to sever {max_severed} path(s)."
+    }
 
 
 class MockAttackPathLLM:

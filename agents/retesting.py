@@ -16,6 +16,30 @@ class MockRetestEvaluator:
         else:
             return False, "Target is still executing the payload and returning the marker."
 
+async def retest_probe(target: str, original_finding: Any) -> Tuple[bool, str]:
+    """Reruns the original benign verification check against target to determine if remediated."""
+    poc = getattr(original_finding, "proof_of_concept", None)
+    if not poc and isinstance(original_finding, dict):
+        poc = original_finding.get("proof_of_concept") or original_finding.get("test_payload")
+    if not poc:
+        poc = "' OR '1'='1' --"
+    raw_response = await execute_in_sandbox(payload=poc, target=target)
+    evaluator = MockRetestEvaluator()
+    return await evaluator.evaluate_fix(poc, raw_response)
+
+def verification_reporter(original: Any, retest_result: Any) -> Dict[str, Any]:
+    """Diffs before and after verification evidence and writes remediation verification record."""
+    is_remediated = retest_result[0] if isinstance(retest_result, tuple) else bool(retest_result)
+    reason = retest_result[1] if isinstance(retest_result, tuple) else str(retest_result)
+    
+    orig_title = getattr(original, "title", None) or (original.get("title") if isinstance(original, dict) else "Vulnerability")
+    return {
+        "vulnerability": orig_title,
+        "status": "REMEDIATED" if is_remediated else "STILL_VULNERABLE",
+        "verification_evidence": reason,
+        "is_remediated": is_remediated
+    }
+
 class RetestingAgent:
     def __init__(self, db_client, evaluator_client):
         self.db = db_client

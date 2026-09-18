@@ -561,7 +561,8 @@ async def tool_dlr_bruteforce(target_url: str, wordlist_type: str = "common") ->
 
     try:
         async with httpx.AsyncClient(timeout=2.0, verify=False, follow_redirects=False) as client:
-            for item in sensitive_paths:
+            async def _probe_path(item):
+                nonlocal live_checked
                 full_url = f"{base_url}{item['path']}"
                 try:
                     r = await client.get(full_url)
@@ -607,6 +608,8 @@ async def tool_dlr_bruteforce(target_url: str, wordlist_type: str = "common") ->
                         })
                 except Exception:
                     pass
+
+            await asyncio.gather(*[_probe_path(item) for item in sensitive_paths], return_exceptions=True)
     except Exception:
         pass
 
@@ -662,7 +665,8 @@ async def tool_api_endpoint_scanner(target_url: str, deep_scan: bool = True) -> 
 
     try:
         async with httpx.AsyncClient(timeout=2.0, verify=False, follow_redirects=False) as client:
-            for route in api_routes:
+            async def _probe_route(route):
+                nonlocal live_checked
                 full_url = f"{base_url}{route['route']}"
                 try:
                     r = await client.request(route["method"], full_url)
@@ -704,6 +708,8 @@ async def tool_api_endpoint_scanner(target_url: str, deep_scan: bool = True) -> 
                             })
                 except Exception:
                     pass
+
+            await asyncio.gather(*[_probe_route(route) for route in api_routes], return_exceptions=True)
     except Exception:
         pass
 

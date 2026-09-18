@@ -2,8 +2,73 @@ import logging
 from typing import Dict, Any
 from core.models import VulnStatus, AgentType, TaskItem
 from tools.safety import SafetyValidator, DataSanitizer, execute_in_sandbox
+from tools.recon import search_nvd, exploitdb_search
 
 logger = logging.getLogger("ValidationAgent")
+
+def cve_verifier(finding: str, cve_id: str) -> Dict[str, Any]:
+    """
+    Cross-checks a discovered vulnerability against NVD metadata and Exploit-DB
+    to confirm whether public Proof-of-Concept exploits exist.
+    """
+    nvd_data = search_nvd(cve_id) if cve_id and cve_id.startswith("CVE-") else {}
+    edb_data = exploitdb_search(cve_id) if cve_id and cve_id.startswith("CVE-") else {}
+    
+    cvss = nvd_data.get("cvss_score", 7.5) if nvd_data else 7.5
+    has_poc = edb_data.get("has_exploit", False) if edb_data else False
+    
+    return {
+        "finding": finding,
+        "cve_id": cve_id,
+        "is_known_cve": bool(nvd_data),
+        "cvss_score": cvss,
+        "has_public_poc": has_poc,
+        "poc_count": edb_data.get("poc_count", 0),
+        "severity": nvd_data.get("severity", "HIGH"),
+        "source": "nvd_and_exploitdb"
+    }
+
+def exploitability_scorer(cve_id: str, context: Dict[str, Any] = None) -> float:
+    """
+    Calculates exploitability confidence score (0.0 to 1.0) based on CVSS + PoC existence + reachability.
+    """
+    context = context or {}
+    nvd = search_nvd(cve_id) if cve_id and cve_id.startswith("CVE-") else {}
+    edb = exploitdb_search(cve_id) if cve_id and cve_id.startswith("CVE-") else {}
+    
+    cvss = nvd.get("cvss_score", context.get("criticality_score", 7.0))
+    has_poc = edb.get("has_exploit", False) or bool(context.get("test_payload"))
+    
+    score = (cvss / 10.0) * 0.7
+    if has_poc:
+        score += 0.2
+    if context.get("reachability", "network") == "network":
+        score += 0.1
+    return round(min(1.0, max(0.1, score)), 2)
+
+async def safe_probe(target: str, vuln_type: str, payload: str = None) -> Dict[str, Any]:
+    """
+    Non-destructive confirmation probe (sends benign payload, executes in sandbox/live probe, checks response).
+    """
+    p = payload or ("' OR '1'='1' --" if "sql" in vuln_type.lower() else "<script>/*canary*/alert(1)</script>")
+    raw_response = await execute_in_sandbox(p, target)
+    safe_response, creds_leaked = DataSanitizer.scrub_response(raw_response)
+    
+    is_hardened = "hardened perimeter active" in safe_response.lower() or "server: gws" in safe_response.lower()
+    confirmed = any(m.lower() in safe_response.lower() for m in [
+        "agent_validated_success", "root:x:0", "syntax error near",
+        "<script>/*canary*/alert(1)</script>", "no_security_headers_found",
+        "cleartext_http_transmission_confirmed", "db_password=", "dmarc_policy_absent"
+    ]) and not is_hardened
+    
+    return {
+        "target": target,
+        "vuln_type": vuln_type,
+        "payload_sent": p,
+        "is_confirmed": confirmed,
+        "credentials_leaked": creds_leaked,
+        "response_evidence": safe_response[:300]
+    }
 
 class MockValidationLLM:
     """Simulates an LLM generating a safe PoC based on vulnerability context."""
