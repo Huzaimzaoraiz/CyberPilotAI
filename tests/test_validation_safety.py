@@ -1,8 +1,8 @@
 import pytest
-from core.database import DatabaseClient
+from core.db import DatabaseClient
 from core.models import TargetAsset, VulnerabilityRecord, VulnStatus, AgentType
 from agents.validation import ValidationAgent, MockValidationLLM
-from report.report import posture_scorer
+from report.scorer import posture_scorer
 from tests.test_safety import *
 
 @pytest.mark.asyncio

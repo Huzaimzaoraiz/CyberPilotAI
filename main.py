@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 import uvicorn
 
-from core.database import DatabaseClient
+from core.db import DatabaseClient
 from core.models import TargetAsset, TaskItem, AgentType
 from agents.orchestrator import Orchestrator
 from api.routes import router as api_router

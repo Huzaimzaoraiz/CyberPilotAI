@@ -1,6 +1,6 @@
 import pytest
 import asyncio
-from core.database import DatabaseClient
+from core.db import DatabaseClient
 from core.models import TargetAsset, VulnerabilityRecord, VulnStatus
 from agents.attack_path import AttackPathAgent, MockAttackPathCorrelator
 

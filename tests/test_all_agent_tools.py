@@ -13,7 +13,9 @@ from agents.validation import cve_verifier, exploitability_scorer, safe_probe
 from agents.attack_path import graph_builder, path_ranker, break_chain_analyzer, mitre_mapper
 from agents.remediation import root_cause_analyzer, fix_generator, patch_prioritizer
 from agents.retesting import retest_probe, verification_reporter
-from report.report import report_exporter, posture_scorer, attack_graph_renderer
+from report.exporter import report_exporter
+from report.scorer import posture_scorer
+from report.graph import attack_graph_renderer
 from core.models import VulnerabilityRecord, TargetAsset, VulnStatus
 
 # --- 1. Standalone Reconnaissance Tools Tests ---

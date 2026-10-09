@@ -1,6 +1,6 @@
 import os
 import pytest
-from core.database import DatabaseClient, normalize_source, normalize_status
+from core.db import DatabaseClient, normalize_source, normalize_status
 from core.models import TargetAsset, VulnerabilityRecord, VulnStatus, TaskItem, AgentType
 
 def test_source_normalization_and_constraints():

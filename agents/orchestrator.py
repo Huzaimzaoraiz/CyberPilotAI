@@ -9,7 +9,7 @@ from agents.attack_path.mock import MockAttackPathLLM
 from agents.threat_intel import ThreatIntelAgent
 from agents.remediation import RemediationAgent, MockRemediationLLM
 from agents.retesting import RetestingAgent, MockRetestEvaluator
-from tools.llm import RealLLMClient
+from tools.llm.client import RealLLMClient
 from core.config import settings
 
 logger = logging.getLogger("Orchestrator")

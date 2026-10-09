@@ -1,5 +1,5 @@
 import pytest
-from core.database import DatabaseClient
+from core.db import DatabaseClient
 from core.models import TargetAsset, VulnStatus, AgentType
 from agents.vapt import VAPTAgent, MockLLMClient
 from tools.scanners import run_nmap
