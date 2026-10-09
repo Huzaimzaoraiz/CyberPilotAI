@@ -4,7 +4,8 @@ from typing import Dict, Any
 from core.models import AgentType, TaskItem
 from agents.vapt import VAPTAgent, MockLLMClient
 from agents.validation import ValidationAgent, MockValidationLLM
-from agents.attack_path import AttackPathAgent, MockAttackPathLLM
+from agents.attack_path.agent import AttackPathAgent
+from agents.attack_path.mock import MockAttackPathLLM
 from agents.threat_intel import ThreatIntelAgent
 from agents.remediation import RemediationAgent, MockRemediationLLM
 from agents.retesting import RetestingAgent, MockRetestEvaluator
