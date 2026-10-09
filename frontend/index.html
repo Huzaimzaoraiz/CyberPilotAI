@@ -1,13 +1,32 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" class="dark">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>frontend</title>
+    <title>Agent AI | Autonomous Multi-Agent Security Engine</title>
+
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
   </head>
-  <body>
-    <div id="root"></div>
+  <body class="min-h-screen flex flex-col font-sans antialiased text-slate-100 selection:bg-cyan-500 selection:text-black">
+    <div id="root">
+        <!-- Initial Loader before React Mounts -->
+        <div class="min-h-screen flex items-center justify-center bg-dark-950 text-slate-400">
+            <div class="text-center space-y-3">
+                <div class="inline-block p-4 rounded-2xl bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 text-3xl animate-bounce">
+                    <i class="fa-solid fa-shield-halved"></i>
+                </div>
+                <div class="text-base font-bold text-white tracking-wide">Initializing Agent AI Dashboard...</div>
+                <div class="text-xs text-slate-500 font-mono">Loading autonomous multi-agent telemetry</div>
+            </div>
+        </div>
+    </div>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>
