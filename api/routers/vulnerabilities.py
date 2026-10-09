@@ -43,4 +43,3 @@ async def trigger_retest(vuln_id: str, db: DatabaseClient = Depends(get_db)):
     task_id = await db.insert_task(task)
     
     return {"message": "Retest triggered successfully.", "task_id": task_id}
-@router.get("/session")

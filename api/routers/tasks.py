@@ -22,8 +22,3 @@ async def get_task_queue(db: DatabaseClient = Depends(get_db)):
     active_tasks = [t for t in tasks if t.status in ["pending", "in_progress"]]
     active_tasks.sort(key=lambda x: x.priority, reverse=True)
     return active_tasks
-
-
-# --- 4. Dashboard: Attack Path Visualizer ---
-
-@router.get("/attack-paths", response_model=List[AttackPath])

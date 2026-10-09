@@ -89,9 +89,3 @@ async def create_target_and_start_scan(req: TargetCreateRequest, db: DatabaseCli
         "asset_id": asset_id, 
         "task_id": task_id
     }
-
-
-# --- 2. Dashboard: Monitored Assets ---
-
-@router.get("/assets", response_model=List[TargetAsset])
-@router.get("/targets", response_model=List[TargetAsset])

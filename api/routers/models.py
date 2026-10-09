@@ -44,6 +44,3 @@ async def switch_active_model(req: ModelSwitchRequest, request: Request):
         "message": f"Successfully switched active model to {req.model}",
         "active_model": req.model
     }
-
-# --- 8. On-Demand Vulnerability Scanners (SAST & Web) ---
-

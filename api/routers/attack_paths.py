@@ -19,8 +19,3 @@ router = APIRouter()
 async def get_attack_paths(db: DatabaseClient = Depends(get_db)):
     """Fetches the graph nodes and edges for the frontend UI."""
     return list(db.attack_paths.values())
-
-
-# --- 5. Dashboard: Remediation Studio ---
-
-@router.get("/remediations/{vuln_id}", response_model=RemediationPlan)

@@ -22,8 +22,3 @@ async def get_remediation_plan(vuln_id: str, db: DatabaseClient = Depends(get_db
     if not plan:
         raise HTTPException(status_code=404, detail="Remediation plan not found or not yet generated.")
     return plan
-
-
-# --- 6. Developer Action: Trigger Retest ---
-
-@router.post("/retest/{vuln_id}")

@@ -45,6 +45,3 @@ async def run_web_scan(req: WebScanRequest):
         "findings_count": len(findings),
         "findings": findings
     }
-
-# --- 9. Assessment Report Generation & Export ---
-

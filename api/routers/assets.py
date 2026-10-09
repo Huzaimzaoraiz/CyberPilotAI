@@ -19,8 +19,3 @@ router = APIRouter()
 async def get_assets(db: DatabaseClient = Depends(get_db)):
     """Fetches all registered target assets."""
     return await db.get_all_assets()
-
-
-# --- 3. Dashboard: Vulnerability Posture ---
-
-@router.get("/vulnerabilities", response_model=List[VulnerabilityRecord])

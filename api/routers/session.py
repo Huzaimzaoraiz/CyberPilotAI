@@ -51,6 +51,3 @@ async def get_debug_state(db: DatabaseClient = Depends(get_db)):
         "all_tasks": list(db.tasks.values()),
         "all_vulnerabilities": list(db.vulnerabilities.values())
     }
-
-# --- 7. Model Selection & Fallback Management ---
-
