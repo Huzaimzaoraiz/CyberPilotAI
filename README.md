@@ -154,8 +154,9 @@ Autonomous-Cyber-Defense-Platform/
 Clone the repository and install the required dependencies:
 
 ```bash
-git clone git@github.com:rustys-workplace/Autonomous-Cyber-Defense-Platform.git
-cd Autonomous-Cyber-Defense-Platform
+
+git clone https://github.com/Huzaimzaoraiz/CyberPilotAI
+cd CyberPilotAI
 pip install -r requirements.txt
 ```
 
